@@ -2,7 +2,7 @@
 
 The complete Phase 0–12 roadmap and exit criteria are preserved in PRODUCT_SPEC sections 36–40. First execution spans Phase 1 and the basic Phase 2 export, while Phase 0 preview/GPU/IPC experiments remain explicitly open.
 
-Next: authenticated shared service (Phase 3) before synchronized Tauri Studio (Phase 4). Then native effects/caching, media intelligence, optional voice, advanced model effects, Blender, professional editing, measured optimization, and proprietary release. Release requires owner review of business identity/trademark/IP, binary/model/codec/asset obligations, notices, security, installer and updates. No roadmap item implies shipped support.
+Next: authenticated shared service (Phase 3) before synchronized native egui/eframe Studio (Phase 4). Then native effects/caching, media intelligence, optional voice, advanced model effects, Blender, professional editing, measured optimization, and proprietary release. Release requires owner review of business identity/trademark/IP, binary/model/codec/asset obligations, notices, security, installer and updates. No roadmap item implies shipped support.
 
 ## Owner priority update — 2026-10-09
 

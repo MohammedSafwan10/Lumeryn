@@ -1,0 +1,15 @@
+[package]
+name = "lumeryn-preview"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+lumeryn-core = { path = "../lumeryn-core", version = "=0.1.0" }
+tokio.workspace = true
+cpal.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+uuid.workspace = true

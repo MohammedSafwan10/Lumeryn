@@ -1,0 +1,5 @@
+# Preserve intentional Markdown soft breaks and verbatim imported/legal text.
+docs/PRODUCT_SPEC.md whitespace=-blank-at-eol,-blank-at-eof
+docs/PRODUCT_VISION_UPDATE.md whitespace=-blank-at-eol,-blank-at-eof
+docs/NATIVE_DESKTOP_MIGRATION.md whitespace=-blank-at-eol,-blank-at-eof
+docs/licensing/native-fonts/*.txt whitespace=-blank-at-eol,-blank-at-eof

@@ -9,4 +9,3 @@ Observed one application render wall time: **197.2938 ms**, including CLI proces
 Artifacts for this run: `.lumeryn-scratch/demo-f26b2e5d16ad4eb0b9fa4eafe8d9e535/{project.lumeryn,generated.mkv,trimmed.mp4,contact-sheet.png,summary.json}` (ignored, not committed). The lead visually inspected the sheet: first row red, second row green, matching the selected half-second halves. Automated acceptance separately checks all30decoded RGB frames, audio sample count within AAC padding tolerance, non-silent signal, exact fractional-rate output, and source-byte preservation.
 
 Backend-only experiments in MEDIA.md are separate evidence and are not application performance claims. Next measurements: stage timing/distributions, detailed motion/quality fixtures, immutable-source/hash overhead on large footage, decoder surface/RAM peak, app-only GPU encode/decode initialization and per-codec quality comparisons, native preview cadence/seek and ten-minute AV drift.
-

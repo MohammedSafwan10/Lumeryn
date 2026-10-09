@@ -10,6 +10,7 @@ name = "lumeryn"
 path = "src/main.rs"
 
 [dependencies]
+lumeryn-service = { path = "../lumeryn-service", version = "=0.1.0" }
 lumeryn-core = { path = "../lumeryn-core", version = "=0.1.0" }
 clap.workspace = true
 serde_json.workspace = true

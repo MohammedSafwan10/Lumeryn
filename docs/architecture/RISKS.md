@@ -11,4 +11,3 @@
 | Model/asset redistribution | Separate code, binary and weight licenses; exact checkpoint audit; no automatic installation | Licensing / planned |
 | Malicious media and symlink/source changes | Protocol limits, canonical paths, bounded workers; OS isolation and content hashing later | Security / residual risk |
 | Scalability of JSON graph | Small snapshot baseline; indexed normalized schema migration after long-timeline measurements | Storage / prototype |
-

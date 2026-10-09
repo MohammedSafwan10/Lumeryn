@@ -23,6 +23,13 @@ pub struct Store {
     writable: bool,
 }
 
+/// Prepared imports can only be created by validated probing, outside the service writer lock.
+pub struct PreparedImports {
+    project_path: PathBuf,
+    commands: String,
+    imports: Vec<Option<Media>>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Receipt {
     pub revision: u64,
@@ -135,26 +142,13 @@ impl Store {
             "operations": serde_json::from_str::<serde_json::Value>(r.try_get::<&str,_>("commands")?)? }))).collect()
     }
 
-    pub async fn execute(
+    pub async fn replay(
         &mut self,
         batch: &Batch,
-        expected_revision: Option<u64>,
         key: Option<&str>,
         dry_run: bool,
-        tools: &MediaTools,
-    ) -> Result<Receipt> {
-        if batch.operations.is_empty() || batch.operations.len() > 1000 {
-            return Err(Error::Invalid("batch must have 1..1000 operations".into()));
-        }
-        if key.is_some_and(|k| k.is_empty() || k.len() > 128) {
-            return Err(Error::Invalid(
-                "idempotency key must have 1..128 bytes".into(),
-            ));
-        }
-        let commands = serde_json::to_string(&batch.operations)?;
-        if commands.len() > 1024 * 1024 {
-            return Err(Error::Invalid("commands exceed 1 MiB".into()));
-        }
+    ) -> Result<Option<Receipt>> {
+        let commands = validated_commands(batch, key)?;
         // Replaying a committed operation must not depend on the source still being present.
         if let Some(key) = key
             && let Some(row) =
@@ -163,34 +157,42 @@ impl Store {
                     .fetch_optional(&mut self.connection)
                     .await?
         {
-            return receipt_from_row(row, &commands, dry_run);
+            return Ok(Some(receipt_from_row(row, &commands, dry_run)?));
         }
-        // Probing happens outside the writer lock, while edits are validated against the latest locked snapshot.
-        let mut imports = Vec::with_capacity(batch.operations.len());
-        for operation in &batch.operations {
-            imports.push(match operation {
-                Edit::Import { id, path } => {
-                    let canonical = local_file(path)?;
-                    if canonical == self.path {
-                        return Err(Error::Invalid("cannot import the project database".into()));
-                    }
-                    let metadata = tools.probe(&canonical).await?;
-                    let parent = self
-                        .path
-                        .parent()
-                        .ok_or_else(|| Error::Invalid("missing project parent".into()))?;
-                    let reference = canonical
-                        .strip_prefix(parent)
-                        .map_or_else(|_| canonical.clone(), Path::to_path_buf);
-                    Some(Media {
-                        id: *id,
-                        path: reference,
-                        metadata,
-                    })
-                }
-                _ => None,
-            });
+        Ok(None)
+    }
+
+    pub async fn execute(
+        &mut self,
+        batch: &Batch,
+        expected_revision: Option<u64>,
+        key: Option<&str>,
+        dry_run: bool,
+        tools: &MediaTools,
+    ) -> Result<Receipt> {
+        if let Some(receipt) = self.replay(batch, key, dry_run).await? {
+            return Ok(receipt);
         }
+        let prepared = prepare_imports(&self.path, batch, tools).await?;
+        self.execute_prepared(batch, expected_revision, key, dry_run, prepared)
+            .await
+    }
+
+    pub async fn execute_prepared(
+        &mut self,
+        batch: &Batch,
+        expected_revision: Option<u64>,
+        key: Option<&str>,
+        dry_run: bool,
+        prepared: PreparedImports,
+    ) -> Result<Receipt> {
+        let commands = validated_commands(batch, key)?;
+        if prepared.project_path != self.path || prepared.commands != commands {
+            return Err(Error::Invalid(
+                "prepared imports do not match project and batch".into(),
+            ));
+        }
+        let PreparedImports { imports, .. } = prepared;
         if self.storage_version().await? != STORAGE_VERSION {
             return Err(Error::Unsupported(
                 "run project migrate before editing legacy storage".into(),
@@ -635,4 +637,61 @@ fn receipt_from_row(
         dry_run,
         replayed: true,
     })
+}
+
+/// Decode/probe imports without borrowing the authoritative Store. Commit validates the latest revision.
+pub async fn prepare_imports(
+    project_path: &Path,
+    batch: &Batch,
+    tools: &MediaTools,
+) -> Result<PreparedImports> {
+    let project_path = local_file(project_path)?;
+    let commands = validated_commands(batch, None)?;
+    // Probing happens outside the writer lock, while edits are validated against the latest locked snapshot.
+    let mut imports = Vec::with_capacity(batch.operations.len());
+    for operation in &batch.operations {
+        imports.push(match operation {
+            Edit::Import { id, path } => {
+                let canonical = local_file(path)?;
+                if canonical == project_path {
+                    return Err(Error::Invalid("cannot import the project database".into()));
+                }
+                let metadata = tools.probe(&canonical).await?;
+                let parent = project_path
+                    .parent()
+                    .ok_or_else(|| Error::Invalid("missing project parent".into()))?;
+                let reference = canonical
+                    .strip_prefix(parent)
+                    .map_or_else(|_| canonical.clone(), Path::to_path_buf);
+                Some(Media {
+                    id: *id,
+                    path: reference,
+                    metadata,
+                })
+            }
+            _ => None,
+        });
+    }
+
+    Ok(PreparedImports {
+        project_path,
+        commands,
+        imports,
+    })
+}
+
+fn validated_commands(batch: &Batch, key: Option<&str>) -> Result<String> {
+    if batch.operations.is_empty() || batch.operations.len() > 1000 {
+        return Err(Error::Invalid("batch must have 1..1000 operations".into()));
+    }
+    if key.is_some_and(|k| k.is_empty() || k.len() > 128) {
+        return Err(Error::Invalid(
+            "idempotency key must have 1..128 bytes".into(),
+        ));
+    }
+    let commands = serde_json::to_string(&batch.operations)?;
+    if commands.len() > 1024 * 1024 {
+        return Err(Error::Invalid("commands exceed 1 MiB".into()));
+    }
+    Ok(commands)
 }

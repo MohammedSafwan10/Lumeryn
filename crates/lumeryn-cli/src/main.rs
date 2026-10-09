@@ -1,7 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use lumeryn_core::{
-    Batch, Edit, Error, MediaTools, Project, Result, Store, render, time::FrameRate,
-};
+use lumeryn_core::{Batch, Edit, Error, MediaTools, Project, Result, time::FrameRate};
+use lumeryn_service::{Client, Request, ToolConfig};
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 use tracing::Instrument;
@@ -36,6 +35,12 @@ struct Cli {
 enum Command {
     /// Discover implemented and planned capabilities.
     Capabilities,
+    /// Run the local authoritative project service (normally launched automatically).
+    #[command(subcommand)]
+    Service(ServiceCommand),
+    /// Control a known background render job.
+    #[command(subcommand)]
+    Jobs(JobCommand),
     /// JSON Schema generated from the core's atomic batch command types.
     Schema,
     /// Installed external media tool versions/configuration.
@@ -54,13 +59,43 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         expected_revision: Option<u64>,
+        /// Supply an ID to cancel this render from another CLI client.
+        #[arg(long)]
+        job_id: Option<Uuid>,
     },
     #[command(subcommand)]
     Hardware(HardwareCommand),
 }
 
 #[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    Run {
+        #[arg(long)]
+        project: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum JobCommand {
+    Cancel {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        job_id: Uuid,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum ProjectCommand {
+    /// Read revision/job notifications; expired cursors include a resynchronization snapshot.
+    Watch {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        after_sequence: Option<u64>,
+        #[arg(long, default_value = "0", value_parser = clap::value_parser!(u32).range(0..=30000))]
+        wait_ms: u32,
+    },
     /// Create a new database; existing paths are never overwritten.
     Create {
         #[arg(long)]
@@ -219,7 +254,7 @@ impl ProjectPreset {
     }
 }
 
-#[tokio::main]
+#[tokio::main(worker_threads = 2)]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .json()
@@ -252,7 +287,7 @@ async fn main() -> ExitCode {
     let result = tokio::select! {
         result = execute(cli).instrument(tracing::info_span!("cli_request", request_id = %request_id)) => result,
         signal = tokio::signal::ctrl_c() => match signal {
-            Ok(()) => { eprintln!("{}", json!({"ok":false,"error":{"code":"cancelled","message":"operation cancelled; inspect revision before retry"}})); return ExitCode::from(130); },
+            Ok(()) => { eprintln!("{}", json!({"ok":false,"error":{"code":"cancelled","message":"CLI request cancelled; inspect revision before retry. An admitted render continues in the service; use jobs cancel with its supplied --job-id to stop it."}})); return ExitCode::from(130); },
             Err(error) => Err(Error::Io(error)),
         }
     };
@@ -289,21 +324,30 @@ fn operation_id(id: Option<Uuid>, write: &Write) -> Result<Uuid> {
     Ok(id.unwrap_or_else(Uuid::new_v4))
 }
 
-async fn edit(write: Write, batch: Batch, dry_run: bool, tools: &MediaTools) -> Result<Value> {
-    let mut store = Store::open(&write.project).await?;
-    Ok(serde_json::to_value(
-        store
-            .execute(
-                &batch,
-                write.expected_revision,
-                write.idempotency_key.as_deref(),
-                dry_run,
-                tools,
-            )
-            .await?,
-    )?)
+fn tool_config(tools: &MediaTools) -> ToolConfig {
+    ToolConfig {
+        ffmpeg: tools.ffmpeg.clone(),
+        ffprobe: tools.ffprobe.clone(),
+        timeout_seconds: tools.timeout.as_secs(),
+    }
 }
 
+async fn edit(write: Write, batch: Batch, dry_run: bool, tools: &MediaTools) -> Result<Value> {
+    Client::connect(&write.project)
+        .await?
+        .execute(
+            batch,
+            write.expected_revision,
+            write.idempotency_key,
+            dry_run,
+            tool_config(tools),
+        )
+        .await
+}
+
+async fn project_call(project: PathBuf, request: Request) -> Result<Value> {
+    Client::connect(project).await?.call(request).await
+}
 async fn execute(cli: Cli) -> Result<Value> {
     let tools = MediaTools {
         ffmpeg: cli.ffmpeg,
@@ -313,14 +357,23 @@ async fn execute(cli: Cli) -> Result<Value> {
     match cli.command {
         Command::Capabilities => Ok(json!({
             "api_version":1,"project_schema_version":1,"output":"json",
-            "implemented":["project.create","project.open","project.inspect","project.history","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","media.probe","media.import","timeline.inspect","timeline.clip.add","timeline.clip.trim","render.baseline_mpeg4_aac","hardware.scan.basic","schema","doctor"],
+            "implemented":["project.create","project.open","project.inspect","project.history","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","timeline.inspect","timeline.clip.add","timeline.clip.trim","render.baseline_mpeg4_aac","hardware.scan.basic","schema","doctor"],
             "requires_external_tools":["media.probe","media.import","render"],
             "export_limits":{"track":"one video track","layout":"1..64 contiguous nonoverlapping clips starting at frame 0","source":"matching CFR; frame timestamps verified","audio":"embedded audio or silence; stereo 48000Hz","color":"baseline SDR; no managed HDR"},
             "requirements":{"ordinary_editing":{"gpu_required":false,"cloud_required":false,"models_required":false,"database":"per-project SQLite3.51.3","schema_version":1,"storage_version":1},
                 "baseline_render":{"runtime":["trusted user-installed ffmpeg","trusted user-installed ffprobe"],"codec":"native mpeg4+aac; no hardware encoder selected","decoder_threads_per_input":2,"maximum_clips":64,"measured_peak_ram_bytes":null,"vram_bytes":null,"cpu_fallback":"the implemented baseline"}},
-            "capability_status":{"gpu_encode_decode":"not_benchmarked","native_text":"planned","device_audio":"planned","semantic_vectors":"not_selected","application_database":"planned","fts5":"implemented_metadata_only","cache":"source_content_hashes_only","live_events":"planned"},
-            "planned":["studio","authenticated_service","preview","gpu_renderer","resource_scheduler","models","blender","effects","undo_redo","independent_audio_tracks","h264_preset","transcript_fts5","native_typography","audio_device_output","vector_index"]
+            "capability_status":{"studio":"native_baseline_prototype","preview":"cpu_decode_gpu_upload_prototype","gpu_encode_decode":"not_integrated","native_text":"planned","device_audio":"cpal_prototype_physical_sync_unmeasured","semantic_vectors":"not_selected","application_database":"planned","fts5":"implemented_metadata_only","cache":"source_content_hashes_only","live_events":"implemented_bounded_replay_snapshot_resync"},
+            "components":{"project_service":{"platform":"Windows","transport":"current-user ACL named pipe; remote clients rejected","supported_here":cfg!(windows),"cloud_required":false},"studio":{"executable":"lumeryn-studio","separate_install":true,"stack":"egui/eframe/egui_dock/egui-wgpu/wgpu","preview_gpu_required":true,"hardware_zero_copy":false,"physical_av_sync_verified":false}},
+            "job_control":{"render_accepts_job_id":true,"client_disconnect_cancels_render":false,"cancel_command":"jobs cancel --project <path> --job-id <uuid>","render_concurrency":1,"render_queue_limit":16},
+            "planned":["gpu_compositor","hardware_codec_integration","resource_scheduler","models","blender","effects","undo_redo","independent_audio_tracks","h264_preset","transcript_fts5","native_typography","professional_audio_mixing","proxies","incremental_render_cache","vector_index"]
         })),
+        Command::Service(ServiceCommand::Run { project }) => {
+            lumeryn_service::serve(project).await?;
+            Ok(json!({"service":"stopped"}))
+        }
+        Command::Jobs(JobCommand::Cancel { project, job_id }) => {
+            project_call(project, Request::Cancel { job_id }).await
+        }
         Command::Schema => Ok(serde_json::to_value(schemars::schema_for!(Batch))?),
         Command::Doctor => tools.versions().await,
         Command::Hardware(HardwareCommand::Scan) => Ok(
@@ -329,6 +382,20 @@ async fn execute(cli: Cli) -> Result<Value> {
             "status":"basic_only","scheduler":"not_implemented"}),
         ),
         Command::Project(command) => match command {
+            ProjectCommand::Watch {
+                project,
+                after_sequence,
+                wait_ms,
+            } => {
+                project_call(
+                    project,
+                    Request::Watch {
+                        after_sequence,
+                        wait_ms,
+                    },
+                )
+                .await
+            }
             ProjectCommand::Create {
                 project,
                 name,
@@ -344,54 +411,24 @@ async fn execute(cli: Cli) -> Result<Value> {
                     height.unwrap_or(default_height),
                     fps,
                 )?;
-                let mut store = Store::create(&project, &value).await?;
-                Ok(
-                    json!({"project":store.inspect().await?,"sqlite_version":store.sqlite_version().await?}),
-                )
+                project_call(project, Request::Create { project: value }).await
             }
-            ProjectCommand::Inspect { project } | ProjectCommand::Open { project } => Ok(
-                serde_json::to_value(Store::open(&project).await?.inspect().await?)?,
-            ),
-            ProjectCommand::History { project } => Ok(serde_json::to_value(
-                Store::open(&project).await?.history().await?,
-            )?),
+            ProjectCommand::Inspect { project } | ProjectCommand::Open { project } => {
+                project_call(project, Request::Inspect).await
+            }
+            ProjectCommand::History { project } => project_call(project, Request::History).await,
             ProjectCommand::Check { project, assets } => {
-                let mut store = Store::open(&project).await?;
-                let mut result = store.integrity_check().await?;
-                if assets {
-                    let snapshot = store.inspect().await?;
-                    let parent = store
-                        .path()
-                        .parent()
-                        .ok_or_else(|| Error::Invalid("project parent unavailable".into()))?;
-                    for media in &snapshot.media {
-                        let path = parent.join(&media.path);
-                        let expected = media.metadata.blake3.as_ref().ok_or_else(|| {
-                            Error::Unsupported(format!("media {} has no content digest", media.id))
-                        })?;
-                        if &lumeryn_core::media::content_hash(&path).await? != expected {
-                            return Err(Error::Invalid(format!(
-                                "media {} content changed",
-                                media.id
-                            )));
-                        }
-                    }
-                    result["source_assets"] =
-                        json!({"status":"verified","count":snapshot.media.len()});
-                }
-                Ok(result)
+                project_call(project, Request::Check { assets }).await
             }
-            ProjectCommand::Migrate { project } => Store::open(&project).await?.migrate().await,
+            ProjectCommand::Migrate { project } => project_call(project, Request::Migrate).await,
             ProjectCommand::Backup { project, output } => {
-                Store::open(&project).await?.backup(&output).await
+                project_call(project, Request::Backup { output }).await
             }
             ProjectCommand::Search {
                 project,
                 query,
                 limit,
-            } => Ok(serde_json::to_value(
-                Store::open(&project).await?.search(&query, limit).await?,
-            )?),
+            } => project_call(project, Request::Search { query, limit }).await,
             ProjectCommand::Batch {
                 write,
                 file,
@@ -421,7 +458,7 @@ async fn execute(cli: Cli) -> Result<Value> {
         },
         Command::Timeline(command) => match command {
             TimelineCommand::Inspect { project } => {
-                let project = Store::open(&project).await?.inspect().await?;
+                let project = Client::connect(project).await?.inspect().await?;
                 Ok(
                     json!({"revision":project.revision,"frame_rate":project.frame_rate,"video_track_id":project.video_track_id,"clips":project.clips}),
                 )
@@ -476,20 +513,18 @@ async fn execute(cli: Cli) -> Result<Value> {
             project,
             output,
             expected_revision,
+            job_id,
         } => {
-            let mut store = Store::open(&project).await?;
-            let project = store.inspect().await?;
-            if let Some(expected) = expected_revision
-                && expected != project.revision
-            {
-                return Err(Error::Conflict {
-                    expected,
-                    current: project.revision,
-                });
-            }
-            Ok(serde_json::to_value(
-                render::export(&project, store.path(), &output, &tools).await?,
-            )?)
+            project_call(
+                project,
+                Request::Render {
+                    output,
+                    expected_revision,
+                    tools: tool_config(&tools),
+                    job_id: job_id.unwrap_or_else(Uuid::new_v4),
+                },
+            )
+            .await
         }
     }
 }

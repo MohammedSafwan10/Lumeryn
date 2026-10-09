@@ -2,7 +2,7 @@
 
 Date: 2026-10-09
 
-Status: Accepted staged design; installers, production signing, updater and expanded capability registry remain unimplemented.
+Status: Historical; desktop and packaging decisions superseded by ADR 0010 and ADR 0011. Shared headless service, security, capability and resource principles remain applicable. No Tauri/WebView fallback is authorized.
 
 ## Context
 

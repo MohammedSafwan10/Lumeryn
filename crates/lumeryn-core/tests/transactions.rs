@@ -42,6 +42,50 @@ fn add(media_id: Uuid, id: Uuid, duration_frames: u64) -> Edit {
 }
 
 #[tokio::test]
+async fn prepared_edits_bind_project_and_commands_and_recheck_revision() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("project.lumeryn");
+    let (project, media_id) = fixture()?;
+    let mut store = Store::create(&path, &project).await?;
+    let batch = Batch {
+        operations: vec![add(media_id, Uuid::new_v4(), 60)],
+    };
+    let tools = MediaTools::default();
+    let prepared = lumeryn_core::storage::prepare_imports(&path, &batch, &tools).await?;
+    let different = Batch {
+        operations: vec![add(media_id, Uuid::new_v4(), 30)],
+    };
+    assert!(matches!(
+        store
+            .execute_prepared(&different, Some(0), None, false, prepared)
+            .await,
+        Err(Error::Invalid(_))
+    ));
+    assert_eq!(store.inspect().await?.revision, 0);
+    let stale = lumeryn_core::storage::prepare_imports(&path, &batch, &tools).await?;
+    store
+        .execute(&different, Some(0), None, false, &tools)
+        .await?;
+    assert!(matches!(
+        store
+            .execute_prepared(&batch, Some(0), None, false, stale)
+            .await,
+        Err(Error::Conflict { current: 1, .. })
+    ));
+    let other_path = dir.path().join("other.lumeryn");
+    let mut other = Store::create(&other_path, &project).await?;
+    let wrong_project = lumeryn_core::storage::prepare_imports(&path, &batch, &tools).await?;
+    assert!(matches!(
+        other
+            .execute_prepared(&batch, Some(0), None, false, wrong_project)
+            .await,
+        Err(Error::Invalid(_))
+    ));
+    assert_eq!(other.inspect().await?.revision, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn durable_edits_dry_run_rollback_and_idempotency() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("project.lumeryn");

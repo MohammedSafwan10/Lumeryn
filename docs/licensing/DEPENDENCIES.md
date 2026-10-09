@@ -267,4 +267,3 @@ Entries below retain the exact declared expressions; explicit selections and obl
 | zerovec | 0.11.8 | Unicode-3.0 |
 | zerovec-derive | 0.11.6 | Unicode-3.0 |
 | zmij | 1.0.23 | MIT |
-

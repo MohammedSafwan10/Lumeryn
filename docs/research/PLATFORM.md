@@ -1,3 +1,5 @@
+> Historical research: its Tauri/WebView preview options are rejected by the mandatory native migration. Current desktop guidance: ADR 0010 and research/NATIVE_STUDIO.md. IPC/resource principles remain relevant; the native implementation defines actual supported behavior.
+
 # Platform feasibility and optional backend research
 
 Research date: 2026-10-09. Owner: Architecture research agent. Scope: Studio, preview, local IPC, hardware scheduling, optional backends, interchange and color. This is design research, not evidence that any of these subsystems has been implemented or benchmarked. The CLI milestone's actual evidence belongs in `PROGRESS.md`.

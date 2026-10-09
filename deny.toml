@@ -5,7 +5,9 @@ all-features = false
 [advisories]
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+ignore = [
+  { id = "RUSTSEC-2024-0436", reason = "Reviewed 2026-10-09: egui_dock 0.21.1 requires build-only paste 1.0.15. Maintenance advisory, no reported exploitable defect. Replace when upstream adopts maintained macros; review by 2027-01-09. See docs/licensing/NATIVE_DEPENDENCIES.md." },
+]
 
 [licenses]
 include-dev = true
@@ -15,6 +17,17 @@ allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Un
 unused-allowed-license = "allow"
 private = { ignore = true }
 
+# Narrow, reviewed exceptions; these terms do not license proprietary application code.
+[[licenses.exceptions]]
+crate = "clipboard-win@5.4.1"
+allow = ["BSL-1.0"]
+[[licenses.exceptions]]
+crate = "error-code@3.4.0"
+allow = ["BSL-1.0"]
+[[licenses.exceptions]]
+crate = "epaint_default_fonts@0.36.2"
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
@@ -23,4 +36,3 @@ wildcards = "deny"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-

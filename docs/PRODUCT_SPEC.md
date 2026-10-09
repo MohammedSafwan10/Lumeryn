@@ -1,3 +1,5 @@
+> Requirements precedence: the preserved original master below is followed by owner addenda. The latest mandatory native desktop addendum selects Rust egui/eframe/egui_dock/egui-wgpu/wgpu and supersedes all earlier Tauri/Svelte/WebView directions. The beginner/explainer vision and local SQLite preferences remain authoritative. The performance clarification retains this architecture and requires measured improvements.
+
 # LUMERYN — MASTER SYSTEM PROMPT FOR CODEX
 
 **Project:** Lumeryn  
@@ -3400,3 +3402,11 @@ The native Lumeryn Studio lets the user watch, preview, refine and control the f
 Do not alter that vision.
 
 **Start by inspecting the repository, coordinating current tasks, and implementing the first native Rust Studio milestone. Continue through the full migration and verification process rather than stopping at planning.**
+
+---
+
+# Owner performance clarification — 2026-10-09
+
+Keep Rust + egui + eframe + wgpu + FFmpeg + SQLite as primary architecture. Optimize practical performance, reliability, maintainability and agent-native editing rather than implementing everything in Rust or low-level code for its own sake. Research and benchmark hardware codec initialization, GPU texture interoperability, frame scheduling, timeline virtualization, incremental rendering and proxy workflows. Evaluate MLT as an optional backend or architectural reference with commercial licensing review; retain the authoritative Rust graph and working implementation unless measurements demonstrate a benefit.
+
+Optimized native C/C++ libraries, CPU SIMD, CUDA, Vulkan and platform backends are acceptable when justified by measurements. Do not introduce handwritten Assembly or unsafe Rust optimizations without a proven need. Keep GUI presentation, media decoding, timeline evaluation, export and AI workloads separated. Record bottlenecks, baseline measurements and improvement comparisons; continue existing work without restarting.
