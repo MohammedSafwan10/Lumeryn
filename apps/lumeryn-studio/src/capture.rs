@@ -173,6 +173,7 @@ impl Capture {
                             "pixels_per_point": session.pixels_per_point,
                         },
                         "assets": session.asset_evidence(),
+                        "native_fullscreen": session.native_fullscreen,
                     }));
                     match screenshot_command(&image, self.screenshot_path()) {
                         Ok(command) => {

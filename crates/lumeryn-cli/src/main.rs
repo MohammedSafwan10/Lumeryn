@@ -1,4 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use lumeryn_core::render::{
+    Acceleration, RenderOptions, RenderQuality, RenderResolution, VideoCodec,
+};
 use lumeryn_core::{Batch, Edit, Error, MediaTools, Project, Result, time::FrameRate};
 use lumeryn_service::{Client, Request, ToolConfig};
 use serde_json::{Value, json};
@@ -41,17 +44,23 @@ enum Command {
     /// Control a known background render job.
     #[command(subcommand)]
     Jobs(JobCommand),
-    /// JSON Schema generated from the core's atomic batch command types.
-    Schema,
+    /// JSON Schema generated from the core's batch or final render options.
+    Schema {
+        #[arg(long, value_enum, default_value = "batch")]
+        kind: SchemaKind,
+    },
     /// Installed external media tool versions/configuration.
     Doctor,
     #[command(subcommand)]
     Project(ProjectCommand),
     #[command(subcommand)]
     Media(MediaCommand),
+    /// Discover and verify the locally installed licensed asset catalog.
+    #[command(subcommand)]
+    Assets(AssetCommand),
     #[command(subcommand)]
     Timeline(TimelineCommand),
-    /// Export and fully decode-verify baseline MPEG-4/AAC MP4 to a new path.
+    /// Export and fully decode-verify local MP4 to a new path.
     Render {
         #[arg(long)]
         project: PathBuf,
@@ -62,6 +71,23 @@ enum Command {
         /// Supply an ID to cancel this render from another CLI client.
         #[arg(long)]
         job_id: Option<Uuid>,
+        /// Final resolution: project, hd720, fhd1080 or uhd2160; follows project orientation.
+        #[arg(long, default_value = "project")]
+        resolution: RenderResolution,
+        /// Output FPS: 24, 25, 30 or 60; omitted preserves project rate.
+        #[arg(long)]
+        fps: Option<u32>,
+        /// mpeg4, h264 or h265; availability depends on the installed FFmpeg build.
+        #[arg(long, default_value = "mpeg4")]
+        codec: VideoCodec,
+        /// draft, balanced or high.
+        #[arg(long, default_value = "high")]
+        quality: RenderQuality,
+        #[arg(long)]
+        bitrate_kbps: Option<u32>,
+        /// cpu or auto; auto probes actual encoder initialization and reports CPU fallback.
+        #[arg(long, default_value = "cpu")]
+        acceleration: Acceleration,
     },
     #[command(subcommand)]
     Hardware(HardwareCommand),
@@ -194,8 +220,54 @@ enum MediaCommand {
     },
 }
 
+#[derive(Debug, Args)]
+struct LibraryLocation {
+    #[arg(long)]
+    library: Option<PathBuf>,
+}
+#[derive(Debug, Subcommand)]
+enum AssetCommand {
+    List {
+        #[command(flatten)]
+        location: LibraryLocation,
+        #[arg(long, default_value = "0")]
+        offset: u32,
+        #[arg(long, default_value = "128", value_parser = clap::value_parser!(u32).range(1..=128))]
+        limit: u32,
+    },
+    Search {
+        #[command(flatten)]
+        location: LibraryLocation,
+        #[arg(long)]
+        query: String,
+        #[arg(long, default_value = "20", value_parser = clap::value_parser!(u32).range(1..=128))]
+        limit: u32,
+    },
+    Inspect {
+        #[command(flatten)]
+        location: LibraryLocation,
+        #[arg(long)]
+        id: String,
+    },
+    Check {
+        #[command(flatten)]
+        location: LibraryLocation,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 enum TimelineCommand {
+    /// Set the project canvas; final output fits this aspect without stretching sources.
+    Canvas {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long, value_enum, default_value = "landscape")]
+        preset: ProjectPreset,
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
+    },
     Inspect {
         #[arg(long)]
         project: PathBuf,
@@ -206,6 +278,42 @@ enum TimelineCommand {
 
 #[derive(Debug, Subcommand)]
 enum ClipCommand {
+    Split {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        right_clip_id: Option<Uuid>,
+        #[arg(long)]
+        at_frame: u64,
+    },
+    Duplicate {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        id: Option<Uuid>,
+    },
+    Delete {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        /// Preserve later positions (creates a gap; baseline export then fails explicitly).
+        #[arg(long)]
+        leave_gap: bool,
+    },
+    Reorder {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        /// Omit to append to the contiguous sequence.
+        #[arg(long)]
+        before_clip_id: Option<Uuid>,
+    },
     Add {
         #[command(flatten)]
         write: Write,
@@ -242,6 +350,12 @@ enum ProjectPreset {
     Landscape,
     Portrait,
     Square,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SchemaKind {
+    Batch,
+    Render,
 }
 
 impl ProjectPreset {
@@ -355,17 +469,54 @@ async fn execute(cli: Cli) -> Result<Value> {
         timeout: Duration::from_secs(cli.timeout_seconds),
     };
     match cli.command {
+        Command::Assets(command) => {
+            use lumeryn_core::library::{Catalog, default_root};
+            let location = match &command {
+                AssetCommand::List { location, .. }
+                | AssetCommand::Search { location, .. }
+                | AssetCommand::Inspect { location, .. }
+                | AssetCommand::Check { location } => location,
+            };
+            let root = match &location.library {
+                Some(path) => path.clone(),
+                None => default_root()?,
+            };
+            let catalog = Catalog::load(root)?;
+            match command {
+                AssetCommand::List { limit, offset, .. } => {
+                    let total = catalog.entries().len();
+                    let offset = offset as usize;
+                    if offset > total {
+                        return Err(Error::Invalid(format!(
+                            "asset offset exceeds catalog size {total}"
+                        )));
+                    }
+                    let end = offset.saturating_add(limit as usize).min(total);
+                    Ok(
+                        json!({"assets":&catalog.entries()[offset..end],"total":total,"offset":offset,"limit":limit,"next_offset":(end < total).then_some(end)}),
+                    )
+                }
+                AssetCommand::Search { query, limit, .. } => {
+                    Ok(json!({"assets":catalog.search(&query, limit as usize)?}))
+                }
+                AssetCommand::Inspect { id, .. } => Ok(
+                    json!({"asset":catalog.get(&id)?,"verified_path":catalog.verified_path(&id)?}),
+                ),
+                AssetCommand::Check { .. } => Ok(serde_json::to_value(catalog.check()?)?),
+            }
+        }
         Command::Capabilities => Ok(json!({
             "api_version":1,"project_schema_version":1,"output":"json",
-            "implemented":["project.create","project.open","project.inspect","project.history","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","timeline.inspect","timeline.clip.add","timeline.clip.trim","render.baseline_mpeg4_aac","hardware.scan.basic","schema","doctor"],
+            "implemented":["project.create","project.open","project.inspect","project.history","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
             "requires_external_tools":["media.probe","media.import","render"],
             "export_limits":{"track":"one video track","layout":"1..64 contiguous nonoverlapping clips starting at frame 0","source":"matching CFR; frame timestamps verified","audio":"embedded audio or silence; stereo 48000Hz","color":"baseline SDR; no managed HDR"},
+            "export_options":{"resolution":["project","hd720","fhd1080","uhd2160"],"uhd_landscape":[3840,2160],"uhd_portrait":[2160,3840],"fps":[24,25,30,60],"preserve_project_fps":true,"codecs":["mpeg4","h264","h265"],"codec_availability":"installed encoder and actual requested-size initialization","quality":["draft","balanced","high"],"bitrate_kbps_range":[100,200000],"acceleration":["cpu","auto"],"watermark":false,"subscription_required":false,"preview_settings_affect_final":false,"eight_k_hdr_mastering":"staged"},
             "requirements":{"ordinary_editing":{"gpu_required":false,"cloud_required":false,"models_required":false,"database":"per-project SQLite3.51.3","schema_version":1,"storage_version":1},
                 "baseline_render":{"runtime":["trusted user-installed ffmpeg","trusted user-installed ffprobe"],"codec":"native mpeg4+aac; no hardware encoder selected","decoder_threads_per_input":2,"maximum_clips":64,"measured_peak_ram_bytes":null,"vram_bytes":null,"cpu_fallback":"the implemented baseline"}},
-            "capability_status":{"studio":"native_baseline_prototype","preview":"cpu_decode_gpu_upload_prototype","gpu_encode_decode":"not_integrated","native_text":"planned","device_audio":"cpal_prototype_physical_sync_unmeasured","semantic_vectors":"not_selected","application_database":"planned","fts5":"implemented_metadata_only","cache":"source_content_hashes_only","live_events":"implemented_bounded_replay_snapshot_resync"},
+            "capability_status":{"studio":"native_baseline_prototype","preview":"cpu_decode_gpu_upload_prototype","gpu_encode_decode":"auto_encoding_probe_available_decode_not_integrated","native_text":"planned","device_audio":"cpal_prototype_physical_sync_unmeasured","semantic_vectors":"not_selected","application_database":"planned","fts5":"implemented_metadata_only","cache":"source_content_hashes_only","live_events":"implemented_bounded_replay_snapshot_resync"},
             "components":{"project_service":{"platform":"Windows","transport":"current-user ACL named pipe; remote clients rejected","supported_here":cfg!(windows),"cloud_required":false},"studio":{"executable":"lumeryn-studio","separate_install":true,"stack":"egui/eframe/egui_dock/egui-wgpu/wgpu","preview_gpu_required":true,"hardware_zero_copy":false,"physical_av_sync_verified":false}},
             "job_control":{"render_accepts_job_id":true,"client_disconnect_cancels_render":false,"cancel_command":"jobs cancel --project <path> --job-id <uuid>","render_concurrency":1,"render_queue_limit":16},
-            "planned":["gpu_compositor","hardware_codec_integration","resource_scheduler","models","blender","effects","undo_redo","independent_audio_tracks","h264_preset","transcript_fts5","native_typography","professional_audio_mixing","proxies","incremental_render_cache","vector_index"]
+            "planned":["gpu_compositor","hardware_decode_integration","resource_scheduler","models","blender","effects","undo_redo","independent_audio_tracks","transcript_fts5","native_typography","professional_audio_mixing","proxies","incremental_render_cache","vector_index"]
         })),
         Command::Service(ServiceCommand::Run { project }) => {
             lumeryn_service::serve(project).await?;
@@ -374,7 +525,10 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::Jobs(JobCommand::Cancel { project, job_id }) => {
             project_call(project, Request::Cancel { job_id }).await
         }
-        Command::Schema => Ok(serde_json::to_value(schemars::schema_for!(Batch))?),
+        Command::Schema { kind } => Ok(match kind {
+            SchemaKind::Batch => serde_json::to_value(schemars::schema_for!(Batch))?,
+            SchemaKind::Render => serde_json::to_value(schemars::schema_for!(RenderOptions))?,
+        }),
         Command::Doctor => tools.versions().await,
         Command::Hardware(HardwareCommand::Scan) => Ok(
             json!({"os":std::env::consts::OS,"architecture":std::env::consts::ARCH,
@@ -457,6 +611,96 @@ async fn execute(cli: Cli) -> Result<Value> {
             }
         },
         Command::Timeline(command) => match command {
+            TimelineCommand::Canvas {
+                write,
+                preset,
+                width,
+                height,
+            } => {
+                let (width, height) = match (width, height) {
+                    (Some(width), Some(height)) => (width, height),
+                    (None, None) => preset.dimensions(),
+                    _ => return Err(Error::Invalid("supply both --width and --height".into())),
+                };
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::SetCanvas { width, height }],
+                    },
+                    false,
+                    &tools,
+                )
+                .await
+            }
+            TimelineCommand::Clip(ClipCommand::Split {
+                write,
+                clip_id,
+                right_clip_id,
+                at_frame,
+            }) => {
+                let right_clip_id = operation_id(right_clip_id, &write)?;
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::SplitClip {
+                            clip_id,
+                            right_clip_id,
+                            at_frame,
+                        }],
+                    },
+                    false,
+                    &tools,
+                )
+                .await
+            }
+            TimelineCommand::Clip(ClipCommand::Duplicate { write, clip_id, id }) => {
+                let id = operation_id(id, &write)?;
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::DuplicateClip { clip_id, id }],
+                    },
+                    false,
+                    &tools,
+                )
+                .await
+            }
+            TimelineCommand::Clip(ClipCommand::Delete {
+                write,
+                clip_id,
+                leave_gap,
+            }) => {
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::DeleteClip {
+                            clip_id,
+                            ripple: !leave_gap,
+                        }],
+                    },
+                    false,
+                    &tools,
+                )
+                .await
+            }
+            TimelineCommand::Clip(ClipCommand::Reorder {
+                write,
+                clip_id,
+                before_clip_id,
+            }) => {
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::ReorderClip {
+                            clip_id,
+                            before_clip_id,
+                        }],
+                    },
+                    false,
+                    &tools,
+                )
+                .await
+            }
             TimelineCommand::Inspect { project } => {
                 let project = Client::connect(project).await?.inspect().await?;
                 Ok(
@@ -514,7 +758,22 @@ async fn execute(cli: Cli) -> Result<Value> {
             output,
             expected_revision,
             job_id,
+            resolution,
+            fps,
+            codec,
+            quality,
+            bitrate_kbps,
+            acceleration,
         } => {
+            let options = RenderOptions {
+                resolution,
+                fps,
+                codec,
+                quality,
+                bitrate_kbps,
+                acceleration,
+            };
+            options.validate()?;
             project_call(
                 project,
                 Request::Render {
@@ -522,6 +781,7 @@ async fn execute(cli: Cli) -> Result<Value> {
                     expected_revision,
                     tools: tool_config(&tools),
                     job_id: job_id.unwrap_or_else(Uuid::new_v4),
+                    options,
                 },
             )
             .await

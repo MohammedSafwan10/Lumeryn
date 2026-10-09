@@ -242,10 +242,20 @@ impl Store {
         let mut object_ids = Vec::new();
         for (operation, imported) in batch.operations.iter().zip(imports) {
             project.apply(operation, imported)?;
-            object_ids.push(match operation {
-                Edit::Import { id, .. } | Edit::AddClip { id, .. } => *id,
-                Edit::TrimClip { clip_id, .. } => *clip_id,
-            });
+            match operation {
+                Edit::Import { id, .. }
+                | Edit::AddClip { id, .. }
+                | Edit::DuplicateClip { id, .. } => object_ids.push(*id),
+                Edit::TrimClip { clip_id, .. }
+                | Edit::DeleteClip { clip_id, .. }
+                | Edit::ReorderClip { clip_id, .. } => object_ids.push(*clip_id),
+                Edit::SplitClip {
+                    clip_id,
+                    right_clip_id,
+                    ..
+                } => object_ids.extend([*clip_id, *right_clip_id]),
+                Edit::SetCanvas { .. } => object_ids.push(project.id),
+            }
         }
         project.revision = previous
             .checked_add(1)

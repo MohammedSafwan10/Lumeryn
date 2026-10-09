@@ -63,7 +63,11 @@ try {
         @{name='compact';state='inspector';width=980;height=640},
         @{name='export';state='export';width=1440;height=900},
         @{name='tools';state='tools';width=1280;height=800},
-        @{name='empty';state='empty';width=1280;height=800}
+        @{name='empty';state='empty';width=1280;height=800},
+        @{name='library';state='library';width=1440;height=900},
+        @{name='library-audio';state='library-audio';width=1440;height=900},
+        @{name='collapsed';state='collapsed';width=980;height=640},
+        @{name='fullscreen';state='fullscreen';width=1440;height=900}
     )
     $captureResults = [Collections.Generic.List[object]]::new()
     foreach ($captureCase in $captureCases) {
@@ -101,6 +105,7 @@ try {
             if ($captureCase.state -eq 'empty' -and $null -ne $captureReport.project_revision) {
                 throw 'Empty capture unexpectedly loaded a project'
             }
+            if ($captureCase.state -eq 'fullscreen' -and $captureReport.capture.native_fullscreen -ne $true) { throw 'OS native fullscreen was not confirmed' }
             $captureBytes = [IO.File]::ReadAllBytes($captureScreenshot)
             if ($captureBytes.Length -lt 24 -or [Convert]::ToHexString($captureBytes[0..7]) -ne '89504E470D0A1A0A') { throw 'Invalid native PNG capture' }
             $capturePixelWidth = ([uint32]$captureBytes[16] -shl 24) -bor ([uint32]$captureBytes[17] -shl 16) -bor ([uint32]$captureBytes[18] -shl 8) -bor [uint32]$captureBytes[19]

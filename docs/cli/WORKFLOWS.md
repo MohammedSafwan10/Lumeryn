@@ -20,9 +20,34 @@ lumeryn project search --project project.lumeryn --query source --limit 20
 lumeryn project backup --project project.lumeryn --output backup.lumeryn
 ```
 
-Import/add/trim receipts contain revision and stable object IDs; inspect retrieves the committed state. In/out ranges are half-open integer source frames, clip positions are project frames, and compatible source/project CFR is required. The same core commands will serve Studio after the authenticated service is implemented. `project open` is headless validation, not a Studio launch.
+Edit receipts contain revision and stable object IDs; inspect retrieves the committed state. In/out ranges are half-open integer source frames, clip positions are project frames, and compatible source/project CFR is required. The same core commands serve native Studio through the authoritative service. `project open` is headless validation, not a Studio launch.
 
-Export is the tested baseline MPEG-4 Part2/AAC MP4, not H.264. It requires 1..64 contiguous nonoverlapping clips starting at zero on one video track, matching verified CFR, zero-origin embedded streams, square pixels and baseline SDR. Audio is stereo48kHz from embedded audio or generated silence; no independent audio-track mix/transitions/effects/HDR/VFR support is claimed. Source BLAKE3 hashes are checked before/after processing. A full decoded output check plus exact frame count/rate/dimensions occurs before publishing. Existing output paths are never overwritten. This narrow preset does not establish professional-format compatibility.
+Export defaults to the tested MPEG-4 Part2/AAC CPU preset at project resolution/rational FPS. Select actual local UHD without an account, watermark or subscription:
+
+```powershell
+lumeryn schema --kind render
+lumeryn render --project project.lumeryn --output finished-4k.mp4 --expected-revision 3 --resolution uhd2160 --fps 30 --codec h264 --quality high --acceleration auto
+# Optional --bitrate-kbps 25000 overrides quality rate control. CPU is the default acceleration.
+```
+
+Resolution choices are `project`, `hd720`, `fhd1080`, `uhd2160`; orientation follows the project (UHD3840×2160 landscape,2160×3840 portrait,2160×2160 square). Other aspects fit without stretching. Sources are evaluated directly at final resolution; preview quality and monitor volume never affect final rendering. FPS24/25/30/60 is optional; omit to preserve the project rational rate. Codecs `mpeg4`, `h264`, `h265` depend on usable installed encoders; H.264/H.265 CPU use x264/x265. `auto` actually probes hardware at the selected dimensions/rate and falls back to CPU on probe or encode failure, with the encoder/reason reported. Draft/balanced/high are encoder-specific quality/effort choices, not equivalent visual scores or guaranteed exact bitrate. Beyond-UHD/HDR/mastering remain staged. See [executed UHD evidence](../research/UHD_EXPORT.md).
+
+The supported graph requires 1..64 contiguous nonoverlapping clips starting at zero on one video track, matching verified CFR, zero-origin embedded streams, square pixels and baseline SDR. Audio is stereo48kHz from embedded audio or generated silence; independent audio-track mix/transitions/effects/HDR/VFR remain unsupported. Source BLAKE3 hashes are checked before/after processing. A full decoded output check plus exact codec/frame count/rate/dimensions occurs before publishing. Existing output paths are never overwritten. Output duration rounds up once into the selected FPS, with less than one frame of last-picture/silence extension; AAC decoding can include codec-frame padding.
+
+Read the licensed local asset catalog with bounded pages. These commands do not mutate projects:
+
+```powershell
+lumeryn assets list --offset 0 --limit 128
+# Follow next_offset until null to enumerate the complete catalog.
+lumeryn assets search --query camera --limit 20
+lumeryn assets inspect --id ASSET_ID
+lumeryn assets check
+# Every assets command accepts --library <directory containing catalog.json>.
+```
+
+`inspect` verifies the selected file's SHA256 and license notice before returning its canonical path. `check` verifies all catalog files/notices. Asset catalog entries retain source/license/attribution metadata; they are not proof that every future use clears all trademark/personality rights.
+
+The same shared revision-checked edit API supports `timeline canvas --preset landscape|portrait|square` (or both `--width`/`--height`), `timeline clip split --clip-id <id> --right-clip-id <new-id> --at-frame <absolute interior timeline frame>`, `duplicate --clip-id <id> --id <new-id>`, `delete --clip-id <id>` and `reorder --clip-id <id> --before-clip-id <id>`. All writes take explicit `--project` and revision/idempotency options. Split preserves the original left ID; duplication inserts/ripples after the source; reorder preserves ranges and repacks a contiguous sequence (omit before ID to append). Delete ripples by default; `--leave-gap` preserves later positions and makes baseline export fail on that gap. ID-generating operations require explicit new IDs with idempotency keys. Inspect the new revision after each write.
 
 ## Atomic edits and safe retries
 
@@ -56,4 +81,4 @@ Native Studio and its preview worker share project revision events with the CLI 
 
 On Windows, every CLI project operation connects to the same authoritative service as native Studio. Read live notifications using `project watch --project <path> --after-sequence <n> --wait-ms 2000`; omit the cursor for the latest snapshot. Expired/restarted event cursors resynchronize from persisted project state. Cursors are transient; editing revisions/history remain durable.
 
-Use `render --project <path> --output <new path> --expected-revision <n> --job-id <UUID>` when external cancellation is needed. Rendering captures that committed revision and runs independently; closing Studio or interrupting its CLI request does not cancel an admitted render. Observe job events and explicitly use `jobs cancel --project <path> --job-id <UUID>`. Cancellation cannot retract output already published; inspect job events/output before retrying. The JSON command envelope and conflict/error exit codes are retained.
+Use `render --project <path> --output <new path> --expected-revision <n> --job-id <UUID>` when external cancellation is needed. Rendering captures that committed revision and runs independently; closing Studio or interrupting its CLI request does not cancel an admitted render. Observe job events and explicitly use `jobs cancel --project <path> --job-id <UUID>`. `job_progress` carries actual stages `validating`, `encoder_probe`, `encoding`, `verification`, `publication` with the same job ID/revision; percentages are not fabricated. Cancellation cannot retract output already published; inspect job events/output before retrying. The JSON command envelope and conflict/error exit codes are retained.

@@ -1,5 +1,7 @@
 # Clipchamp reference: feature inventory and Lumeryn delivery plan
 
+Implementation follow-up: the owner subsequently authorized all eighteen flows and unrestricted local UHD. TASKS.md records verified/partial slices. Native rails/fullscreen, baseline clip operations and canvas choices, reviewed catalogue discovery/audition/source import and baseline UHD codec settings are implemented. This original inventory remains the broader scope. See testing/CLIPCHAMP_FOUNDATION.md and ADRs0015–0016 for executed evidence and limitations; the historical statements below describe the inventory checkpoint.
+
 Date: 2026-10-09. Scope: the owner's18screenshots, source audit at local checkpoint `d6e5940`, and current official research. This is the requested first inventory milestone; no new editor feature is claimed implemented. The owner authorizes Clipchamp-style organisation and later implementation/downloads. Keep Lumeryn branding, native Rust, local-first storage and the shared service. B remains a verified historical checkpoint; the new references refine navigation rather than replace the engine.
 
 Status legend: **working** = scoped implemented/tested behavior; **partial** = related foundation exists but the pictured action does not; **missing** = new implementation needed; **optional** = later capability with independently verified runtime/model/provider prerequisites. Tab presence alone is not proof of its hidden options. All proposed CLI names below are design contracts, not existing commands.

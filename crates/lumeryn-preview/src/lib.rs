@@ -1,7 +1,10 @@
 //! Bounded native preview service. All validation, decoding and device work lives off the UI thread.
 mod audio;
+mod audition;
 mod decode;
 mod plan;
+
+pub use audition::{AuditionPlayer, AuditionState, AuditionStatus};
 
 use lumeryn_core::{Error, MediaTools, Project, Result, time::FrameRate};
 use plan::Plan;

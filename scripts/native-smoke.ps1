@@ -1,6 +1,7 @@
 # Opens the real native window and modifies only freshly generated disposable projects.
-param([switch]$SkipBuild)
+param([switch]$SkipBuild, [switch]$Uhd, [switch]$Portrait)
 $ErrorActionPreference = 'Stop'
+if ($Portrait -and -not $Uhd) { throw '-Portrait requires -Uhd in this acceptance script' }
 $nativeRoot = Split-Path $PSScriptRoot -Parent
 function Wait-LumerynBuildFiles([string[]]$Paths) {
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -42,7 +43,17 @@ try {
     $nativeDemo = (& (Join-Path $PSScriptRoot 'demo.ps1') -Motion -SkipBuild | Out-String) | ConvertFrom-Json
     $nativeDirectory = Join-Path $nativeRoot ('.lumeryn-scratch/studio-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $nativeDirectory | Out-Null
+    if ($Portrait) {
+        $portraitBefore = (& $nativeCli project inspect --project $nativeDemo.project | ConvertFrom-Json).result
+        if ($LASTEXITCODE -ne 0) { throw 'Portrait fixture inspection failed' }
+        $portraitEdit = Join-Path $nativeDirectory 'portrait-edit.json'
+        Write-LumerynJsonArtifact -Path $portraitEdit -Value @{operations=@(@{operation='set_canvas';width=720;height=1280})}
+        $portraitReceipt = & $nativeCli project batch --project $nativeDemo.project --file $portraitEdit --expected-revision $portraitBefore.revision
+        if ($LASTEXITCODE -ne 0) { throw 'Portrait fixture canvas edit failed' }
+        Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'portrait-receipt.json') -Value ($portraitReceipt | ConvertFrom-Json)
+    }
     $nativeArguments = @('--smoke','--project',('"' + $nativeDemo.project + '"'),'--artifact-dir',('"' + $nativeDirectory + '"'))
+    if ($Uhd) { $nativeArguments += '--smoke-uhd' }
     $nativeWatch = [Diagnostics.Stopwatch]::StartNew()
     $nativeProcess = Start-Process -FilePath (Join-Path $nativeRoot 'target/debug/lumeryn-studio.exe') -ArgumentList $nativeArguments -WindowStyle Normal -PassThru -RedirectStandardError (Join-Path $nativeDirectory 'stderr.log') -RedirectStandardOutput (Join-Path $nativeDirectory 'stdout.log')
     $nativeSamples = [Collections.Generic.List[object]]::new()
@@ -75,6 +86,21 @@ try {
     $nativeMetrics['binaries'] = @{cli_sha256=(Get-FileHash -LiteralPath $nativeCli -Algorithm SHA256).Hash;studio_sha256=(Get-FileHash -LiteralPath $nativeStudio -Algorithm SHA256).Hash}
     Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'process-metrics.json') -Value $nativeMetrics -Depth 10
     if ($nativeProcess.ExitCode -ne 0 -or -not $nativeReport.passed) { throw ('Native smoke failed; inspect ' + $nativeDirectory) }
+    if ($Uhd) {
+        $expectedWidth = if ($Portrait) { 2160 } else { 3840 }
+        $expectedHeight = if ($Portrait) { 3840 } else { 2160 }
+        $rendered = $nativeReport.render_result
+        if ($rendered.width -ne $expectedWidth -or $rendered.height -ne $expectedHeight -or $rendered.frame_rate -ne '60/1' -or -not $rendered.verified_full_decode -or $rendered.options.codec -ne 'h264') { throw 'Studio UHD settings/result were not verified' }
+        $nativeProbe = if ($env:LUMERYN_FFPROBE) { $env:LUMERYN_FFPROBE } else { 'ffprobe' }
+        $probeJson = & $nativeProbe -v error -show_streams -show_format -of json $rendered.path
+        if ($LASTEXITCODE -ne 0) { throw 'Native UHD independent FFprobe failed' }
+        $probe = $probeJson | ConvertFrom-Json
+        $video = @($probe.streams | Where-Object codec_type -eq 'video')[0]
+        $audio = @($probe.streams | Where-Object codec_type -eq 'audio')[0]
+        if ($video.width -ne $expectedWidth -or $video.height -ne $expectedHeight -or $video.r_frame_rate -ne '60/1' -or [long]$video.nb_frames -ne [long]$rendered.frames -or $video.codec_name -ne 'h264') { throw 'Actual native UHD file video parameters mismatch' }
+        if ($audio.sample_rate -ne '48000' -or $audio.channels -ne 2 -or $audio.codec_name -ne 'aac' -or [Math]::Abs([double]$audio.duration - [double]$rendered.duration_seconds) -gt 0.05) { throw 'Actual native UHD file audio/duration mismatch' }
+        Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'uhd-file-verified.json') -Value @{passed=$true;portrait=[bool]$Portrait;probe=$probe;render_result=$rendered;limits='720p synthetic source is upscaled; source-detail and marker-sync acceptance belongs to uhd_export tests. Physical speaker/display synchronization is untested.'}
+    }
     & (Join-Path $nativeRoot 'target/debug/lumeryn.exe') project check --project $nativeDemo.project --assets
     if ($LASTEXITCODE -ne 0) { throw 'Post-Studio project integrity failed' }
     [ordered]@{passed=$true;project=$nativeDemo.project;report=$nativeReportPath;screenshot=(Join-Path $nativeDirectory 'studio-native.png');metrics=(Join-Path $nativeDirectory 'process-metrics.json')} | ConvertTo-Json

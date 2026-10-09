@@ -1,7 +1,7 @@
 # Resolved native workspace dependency inventory
 
 Generated from cargo metadata --locked on 2026-10-09. Runtime, build, macro, target-specific and test dependencies are included. Registry metadata is a review input, not a complete redistribution notice bundle or legal certificate. Proprietary workspace packages are excluded from the third-party table and remain unpublished.
-Lockfile SHA256: `78CC732647426804E08535C981F10E8BC06C5DC4C45D8B10CE97050FAF1F5312`; third-party packages: 497.
+Lockfile SHA256: `920580CB5F30825054F52EF96C53F0E23C366256CE968C454B7CDF5F399346E2`; third-party packages: 497.
 
 The2026-10-09 final cargo-deny gate passed for this exact lockfile (advisories,bans,licenses,sources); rerun after every dependency change. Reviewed exceptions remain in NATIVE_DEPENDENCIES.md and deny.toml; platform duplicates are warning-level. The original CLI inventory in DEPENDENCIES.md is a historical checkpoint.
 

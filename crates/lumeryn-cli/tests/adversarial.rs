@@ -330,11 +330,16 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
     let variants = schema["$defs"]["Edit"]["oneOf"]
         .as_array()
         .ok_or("missing operation variants")?;
-    assert_eq!(variants.len(), 3);
+    assert_eq!(variants.len(), 8);
     for example in [
         json!({"operation":"import","id":"00000000-0000-4000-8000-000000000001","path":"source.mp4"}),
         json!({"operation":"add_clip","id":"00000000-0000-4000-8000-000000000002","media_id":"00000000-0000-4000-8000-000000000001","at_frame":0,"source_in_frame":0,"duration_frames":30}),
         json!({"operation":"trim_clip","clip_id":"00000000-0000-4000-8000-000000000002","source_in_frame":10,"duration_frames":20}),
+        json!({"operation":"split_clip","clip_id":"00000000-0000-4000-8000-000000000002","right_clip_id":"00000000-0000-4000-8000-000000000003","at_frame":15}),
+        json!({"operation":"duplicate_clip","clip_id":"00000000-0000-4000-8000-000000000002","id":"00000000-0000-4000-8000-000000000003"}),
+        json!({"operation":"delete_clip","clip_id":"00000000-0000-4000-8000-000000000002","ripple":true}),
+        json!({"operation":"reorder_clip","clip_id":"00000000-0000-4000-8000-000000000002","before_clip_id":null}),
+        json!({"operation":"set_canvas","width":2160,"height":3840}),
     ] {
         let operation: Edit = serde_json::from_value(example.clone())?;
         let matching = variants
@@ -347,7 +352,12 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
             .ok_or("missing required fields")?;
         assert_eq!(
             required.len(),
-            example.as_object().ok_or("example not an object")?.len()
+            example
+                .as_object()
+                .ok_or("example not an object")?
+                .keys()
+                .filter(|name| !matches!(name.as_str(), "ripple" | "before_clip_id"))
+                .count()
         );
         for name in required {
             assert!(

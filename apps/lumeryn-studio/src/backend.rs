@@ -25,6 +25,7 @@ pub enum Command {
         output: PathBuf,
         revision: u64,
         job_id: Uuid,
+        options: lumeryn_core::render::RenderOptions,
     },
     Cancel {
         job_id: Uuid,
@@ -205,7 +206,7 @@ impl Backend {
                                         Err(error) => { emit(&responses, &ctx, epoch, Message::Error { label: "History".into(), message: error.to_string() }).await; }
                                     }
                                 }
-                                Command::Render { output, revision, job_id } => {
+                                Command::Render { output, revision, job_id, options } => {
                                     if renderer.as_ref().is_some_and(|task| !task.is_finished()) {
                                         emit(&responses, &ctx, epoch, Message::Error { label: "Export".into(), message: "An export request is already active".into() }).await;
                                         continue;
@@ -215,7 +216,7 @@ impl Backend {
                                     let tx = responses.clone();
                                     let wake = ctx.clone();
                                     renderer = Some(tokio::spawn(async move {
-                                        let result = client.call(Request::Render { output, expected_revision: Some(revision), tools, job_id }).await;
+                                        let result = client.call(Request::Render { output, expected_revision: Some(revision), tools, job_id, options }).await;
                                         complete(&tx, &wake, epoch, "Export".into(), result).await;
                                     }));
                                 }

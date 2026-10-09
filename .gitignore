@@ -10,4 +10,5 @@
 .env
 *.pem
 *.key
-
+__pycache__/
+!assets/library/**/*.png

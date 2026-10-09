@@ -307,6 +307,7 @@ async fn render_snapshot_jobs_reads_and_edits_remain_responsive() -> Result<()> 
                 expected_revision: Some(0),
                 tools: ToolConfig::default(),
                 job_id,
+                options: lumeryn_core::render::RenderOptions::default(),
             })
             .await
     });
@@ -342,6 +343,24 @@ async fn render_snapshot_jobs_reads_and_edits_remain_responsive() -> Result<()> 
     assert_eq!(rendered["frames"], 1800);
     assert_eq!(rendered["verified_full_decode"], true);
     let finished = client.watch(Some(events.sequence), 0).await?;
+    let stages = events
+        .events
+        .iter()
+        .chain(&finished.events)
+        .filter(|event| event.kind == "job_progress" && event.data["job_id"] == job_id.to_string())
+        .map(|event| event.data["stage"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stages,
+        [
+            "validating",
+            "encoder_probe",
+            "encoding",
+            "verification",
+            "publication"
+        ]
+        .map(serde_json::Value::from)
+    );
     assert!(
         finished
             .events
@@ -360,6 +379,10 @@ async fn render_snapshot_jobs_reads_and_edits_remain_responsive() -> Result<()> 
                 expected_revision: Some(1),
                 tools: ToolConfig::default(),
                 job_id: cancelled_id,
+                options: lumeryn_core::render::RenderOptions {
+                    resolution: lumeryn_core::render::RenderResolution::Uhd2160,
+                    ..Default::default()
+                },
             })
             .await
     });

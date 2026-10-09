@@ -1,3 +1,4 @@
+use lumeryn_core::render::RenderOptions;
 use lumeryn_core::{Batch, Error, MediaTools, Project};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -75,6 +76,8 @@ pub enum Request {
         expected_revision: Option<u64>,
         tools: ToolConfig,
         job_id: Uuid,
+        #[serde(default)]
+        options: RenderOptions,
     },
     Cancel {
         job_id: Uuid,
@@ -176,4 +179,21 @@ pub(crate) struct Response {
     pub version: u32,
     pub id: Uuid,
     pub result: Result<Value, WireError>,
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    #[test]
+    fn old_render_request_defaults_options_without_changing_wire_version()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request: Request = serde_json::from_value(
+            serde_json::json!({"operation":"render","output":"new.mp4","expected_revision":null,"tools":ToolConfig::default(),"job_id":Uuid::new_v4()}),
+        )?;
+        match request {
+            Request::Render { options, .. } => assert_eq!(options, RenderOptions::default()),
+            _ => return Err("wrong parsed request".into()),
+        }
+        Ok(())
+    }
 }

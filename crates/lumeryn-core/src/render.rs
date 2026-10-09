@@ -3,11 +3,24 @@ use crate::{
     media::{content_hash, local_file},
 };
 use serde::Serialize;
+mod encoder;
+mod options;
+pub use options::{Acceleration, RenderOptions, RenderQuality, RenderResolution, VideoCodec};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
 };
 use tempfile::Builder;
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderStage {
+    Validating,
+    EncoderProbe,
+    Encoding,
+    Verification,
+    Publication,
+}
 
 #[derive(Debug, Serialize)]
 pub struct RenderResult {
@@ -19,6 +32,12 @@ pub struct RenderResult {
     pub height: u32,
     pub preset: &'static str,
     pub verified_full_decode: bool,
+    pub options: RenderOptions,
+    pub encoder: String,
+    pub hardware: bool,
+    pub fallback_reason: Option<String>,
+    pub duration_seconds: f64,
+    pub upscaled: bool,
 }
 
 /// Evaluate a narrow supported graph in Rust before translating to a media backend.
@@ -28,7 +47,48 @@ pub async fn export(
     output: &Path,
     tools: &MediaTools,
 ) -> Result<RenderResult> {
+    export_with_options(project, database, output, tools, &RenderOptions::default()).await
+}
+
+pub async fn export_with_options(
+    project: &Project,
+    database: &Path,
+    output: &Path,
+    tools: &MediaTools,
+    options: &RenderOptions,
+) -> Result<RenderResult> {
+    export_with_progress(project, database, output, tools, options, |_| {
+        std::future::ready(())
+    })
+    .await
+}
+
+pub async fn export_with_progress<F, Fut>(
+    project: &Project,
+    database: &Path,
+    output: &Path,
+    tools: &MediaTools,
+    options: &RenderOptions,
+    progress: F,
+) -> Result<RenderResult>
+where
+    F: Fn(RenderStage) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    progress(RenderStage::Validating).await;
     project.validate()?;
+    options.validate()?;
+    let (width, height) = options.dimensions(project);
+    if width > 3840 || height > 3840 {
+        return Err(Error::Unsupported(
+            "export beyond UHD dimensions is staged; select an implemented resolution preset"
+                .into(),
+        ));
+    }
+    let frame_rate = options.frame_rate(project)?;
+    // Evaluate the project canvas directly at final resolution. Never downsample a UHD
+    // source to the editor canvas before expanding it again for export.
+    let (canvas_width, canvas_height) = fitted_canvas(project.width, project.height, width, height);
     if output.exists() {
         return Err(Error::Exists(output.display().to_string()));
     }
@@ -128,8 +188,7 @@ pub async fn export(
             path.into_os_string(),
         ]);
         let end = clip.source_in_frame + clip.duration_frames;
-        filters.push(format!("[{index}:v:0]trim=start_frame={}:end_frame={end},setpts=PTS-STARTPTS,scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{index}]",
-            clip.source_in_frame, project.width, project.height, project.width, project.height));
+        filters.push(format!("[{index}:v:0]trim=start_frame={}:end_frame={end},setpts=PTS-STARTPTS,scale={canvas_width}:{canvas_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={canvas_width}:{canvas_height}:(ow-iw)/2:(oh-ih)/2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{index}]", clip.source_in_frame));
         let duration = project.frame_rate.seconds(clip.duration_frames);
         if media.metadata.audio.is_some() {
             filters.push(format!("[{index}:a:0]atrim=start={}:duration={duration},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration={duration}[a{index}]", project.frame_rate.seconds(clip.source_in_frame)));
@@ -141,9 +200,22 @@ pub async fn export(
         .map(|index| format!("[v{index}][a{index}]"))
         .collect::<String>();
     filters.push(format!(
-        "{inputs}concat=n={}:v=1:a=1[vout][aout]",
+        "{inputs}concat=n={}:v=1:a=1[vcat][acat]",
         clips.len()
     ));
+    let rendered_frames = options::output_frames(frames, project.frame_rate, frame_rate)?;
+    let duration = frame_rate.seconds(rendered_frames);
+    // Convert presentation rate once after evaluating original source-frame cuts. Pad at most
+    // the quantized final frame; never decode proxies or apply monitor-only audio settings.
+    let mut video_filter = String::new();
+    video_filter.push_str(&format!("settb=expr={}/{},setpts=N,fps=fps={frame_rate}:start_time=0:round=up:eof_action=pass,tpad=stop_mode=clone:stop_duration=1,trim=end_frame={rendered_frames},setpts=N/({frame_rate}*TB)", project.frame_rate.denominator(), project.frame_rate.numerator()));
+    filters.push(format!("[vcat]{video_filter}[vout]"));
+    filters.push(format!(
+        "[acat]apad,atrim=duration={duration},asetpts=PTS-STARTPTS[aout]"
+    ));
+    progress(RenderStage::EncoderProbe).await;
+    let mut selected =
+        encoder::select(tools, options, width, height, &frame_rate.to_string()).await?;
     let parent = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -159,14 +231,10 @@ pub async fn export(
         "[vout]".into(),
         "-map".into(),
         "[aout]".into(),
-        "-c:v".into(),
-        "mpeg4".into(),
-        "-q:v".into(),
-        "2".into(),
         "-pix_fmt".into(),
         "yuv420p".into(),
         "-r".into(),
-        project.frame_rate.to_string().into(),
+        frame_rate.to_string().into(),
         "-fps_mode".into(),
         "cfr".into(),
         "-c:a".into(),
@@ -177,9 +245,32 @@ pub async fn export(
         "2".into(),
         "-movflags".into(),
         "+faststart".into(),
-        temporary.path().as_os_str().to_owned(),
     ]);
-    tools.run(&tools.ffmpeg, &args).await?;
+    let encode = |selected: &encoder::Encoder| {
+        let mut arguments = args.clone();
+        arguments.extend(encoder::arguments(selected.name, options));
+        arguments.push(temporary.path().as_os_str().to_owned());
+        arguments
+    };
+    progress(RenderStage::Encoding).await;
+    if let Err(error) = tools.run(&tools.ffmpeg, &encode(&selected)).await {
+        if !selected.hardware || options.acceleration != Acceleration::Auto {
+            return Err(error);
+        }
+        let mut cpu_options = options.clone();
+        cpu_options.acceleration = Acceleration::Cpu;
+        let cpu =
+            encoder::select(tools, &cpu_options, width, height, &frame_rate.to_string()).await?;
+        selected = encoder::Encoder {
+            fallback: Some(format!(
+                "Hardware encode {} failed; retried CPU {}: {error}",
+                selected.name, cpu.name
+            )),
+            ..cpu
+        };
+        tools.run(&tools.ffmpeg, &encode(&selected)).await?;
+    }
+    progress(RenderStage::Verification).await;
     for (path, digest) in source_digests {
         if &content_hash(&path).await? != digest {
             return Err(Error::Invalid(
@@ -191,11 +282,20 @@ pub async fn export(
     let video = metadata
         .video
         .ok_or_else(|| Error::Media("export has no video".into()))?;
-    if video.frames != frames
-        || video.frame_rate != project.frame_rate
-        || video.width != project.width
-        || video.height != project.height
-        || metadata.audio.is_none()
+    if video.frames != rendered_frames
+        || video.frame_rate != frame_rate
+        || video.width != width
+        || video.height != height
+        || video.codec
+            != match options.codec {
+                VideoCodec::Mpeg4 => "mpeg4",
+                VideoCodec::H264 => "h264",
+                VideoCodec::H265 => "hevc",
+            }
+        || video.start_time_micros != 0
+        || metadata.audio.as_ref().is_none_or(|audio| {
+            audio.start_time_micros != 0 || audio.channels != 2 || audio.sample_rate != 48_000
+        })
     {
         return Err(Error::Media(
             "export failed frame count, frame rate, dimensions or audio verification".into(),
@@ -220,6 +320,7 @@ pub async fn export(
     ])
     .collect::<Vec<_>>();
     tools.run(&tools.ffmpeg, &args).await?;
+    progress(RenderStage::Publication).await;
     temporary.as_file().sync_all()?;
     temporary.persist_noclobber(output).map_err(|error| {
         if error.error.kind() == std::io::ErrorKind::AlreadyExists {
@@ -231,11 +332,50 @@ pub async fn export(
     Ok(RenderResult {
         path: std::fs::canonicalize(output)?,
         project_revision: project.revision,
-        frames,
-        frame_rate: project.frame_rate.to_string(),
-        width: project.width,
-        height: project.height,
-        preset: "baseline-mpeg4-aac",
+        frames: rendered_frames,
+        frame_rate: frame_rate.to_string(),
+        width,
+        height,
+        preset: match options.codec {
+            VideoCodec::Mpeg4 => "baseline-mpeg4-aac",
+            VideoCodec::H264 => "h264-aac",
+            VideoCodec::H265 => "h265-aac",
+        },
         verified_full_decode: true,
+        options: options.clone(),
+        encoder: selected.name.into(),
+        hardware: selected.hardware,
+        fallback_reason: selected.fallback,
+        duration_seconds: rendered_frames as f64 * f64::from(frame_rate.denominator())
+            / f64::from(frame_rate.numerator()),
+        upscaled: clips.iter().any(|clip| {
+            project
+                .media
+                .iter()
+                .find(|media| media.id == clip.media_id)
+                .and_then(|media| media.metadata.video.as_ref())
+                .is_some_and(|video| {
+                    (f64::from(canvas_width) / f64::from(video.width))
+                        .min(f64::from(canvas_height) / f64::from(video.height))
+                        > 1.0
+                })
+        }),
     })
+}
+
+fn fitted_canvas(project_width: u32, project_height: u32, width: u32, height: u32) -> (u32, u32) {
+    let (fit_width, fit_height) = if u64::from(width) * u64::from(project_height)
+        <= u64::from(height) * u64::from(project_width)
+    {
+        (
+            width,
+            (u64::from(width) * u64::from(project_height) / u64::from(project_width)) as u32,
+        )
+    } else {
+        (
+            (u64::from(height) * u64::from(project_width) / u64::from(project_height)) as u32,
+            height,
+        )
+    };
+    (fit_width.max(2) / 2 * 2, fit_height.max(2) / 2 * 2)
 }

@@ -95,6 +95,7 @@ impl Smoke {
             "native_screenshot":self.directory.join("studio-native.png"),"screenshot_saved":self.screenshot_saved,
             "screenshot_assets":self.screenshot_assets,"asset_capture_wait_expired":self.asset_wait_expired,
             "asset_evidence":session.asset_evidence(),
+            "render_result":session.last_render,
             "limitations":["Scripted actions call the same UI command paths; pointer usability and native file-dialog cancellation are separate manual acceptance.","CPU upload timing does not measure GPU completion or photon latency.","VRAM consumption is unknown without telemetry.","Audio device status alone does not prove end-to-end A/V tolerance.","Effects, multi-track composition, undo/redo and proxies remain staged. Thumbnail/waveform caches are bounded; readiness/counts are reported independently of workflow success."]
         });
         if session.send(Command::Report {

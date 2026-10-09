@@ -89,6 +89,13 @@ pub enum Icon {
     Speaker,
     Muted,
     Expand,
+    BackFive,
+    ForwardFive,
+    Media,
+    Clip,
+    Project,
+    Library,
+    Close,
 }
 pub fn icon_button(ui: &mut egui::Ui, icon: Icon, label: &str) -> egui::Response {
     let response = ui.add(
@@ -97,9 +104,57 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, label: &str) -> egui::Response
             .min_size(egui::vec2(36.0, 36.0)),
     );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    let r = egui::Rect::from_center_size(response.rect.center(), egui::vec2(18.0, 18.0));
-    let p = ui.painter();
-    let stroke = Stroke::new(1.8, if response.hovered() { ACCENT } else { TEXT });
+    paint_icon(
+        ui.painter(),
+        response.rect.center(),
+        icon,
+        if response.hovered() { ACCENT } else { TEXT },
+    );
+    response.on_hover_text(label)
+}
+
+pub fn rail_button(ui: &mut egui::Ui, icon: Icon, label: &str, selected: bool) -> egui::Response {
+    let response = ui.add(
+        egui::Button::new("")
+            .frame(false)
+            .selected(selected)
+            .min_size(egui::vec2(58.0, 66.0)),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    if selected {
+        ui.painter().rect_filled(response.rect, 5.0, RAISED);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                response.rect.left_top() + egui::vec2(0.0, 10.0),
+                egui::vec2(3.0, 40.0),
+            ),
+            2.0,
+            ACCENT,
+        );
+    }
+    paint_icon(
+        ui.painter(),
+        response.rect.center_top() + egui::vec2(0.0, 22.0),
+        icon,
+        if selected || response.hovered() {
+            ACCENT
+        } else {
+            MUTED
+        },
+    );
+    ui.painter().text(
+        response.rect.center_bottom() - egui::vec2(0.0, 13.0),
+        egui::Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(11.0),
+        if selected { TEXT } else { MUTED },
+    );
+    response.on_hover_text(label)
+}
+
+fn paint_icon(p: &egui::Painter, center: egui::Pos2, icon: Icon, color: Color32) {
+    let r = egui::Rect::from_center_size(center, egui::vec2(18.0, 18.0));
+    let stroke = Stroke::new(1.8, color);
     let triangle = |x: f32, sign: f32| {
         p.add(egui::Shape::convex_polygon(
             vec![
@@ -183,8 +238,98 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, label: &str) -> egui::Response
                 p.line_segment([corner, corner + egui::vec2(0.0, dy * 6.0)], stroke);
             }
         }
+        Icon::BackFive | Icon::ForwardFive => {
+            let sign = if matches!(icon, Icon::BackFive) {
+                -1.0
+            } else {
+                1.0
+            };
+            let points = (0..=16)
+                .map(|step| {
+                    let angle = -std::f32::consts::FRAC_PI_2
+                        + step as f32 * std::f32::consts::PI * 1.65 / 16.0;
+                    center + egui::vec2(sign * angle.cos() * 9.0, angle.sin() * 9.0)
+                })
+                .collect();
+            p.add(egui::Shape::line(points, stroke));
+            p.add(egui::Shape::convex_polygon(
+                vec![
+                    center + egui::vec2(-sign * 4.0, -9.0),
+                    center + egui::vec2(sign * 2.0, -13.0),
+                    center + egui::vec2(sign * 2.0, -5.0),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+            p.text(
+                center,
+                egui::Align2::CENTER_CENTER,
+                "5",
+                FontId::proportional(10.0),
+                color,
+            );
+        }
+        Icon::Media => {
+            p.add(egui::Shape::line(
+                vec![
+                    r.left_bottom(),
+                    r.left_top(),
+                    r.center_top(),
+                    r.center_top() + egui::vec2(2.0, 4.0),
+                    r.right_top() + egui::vec2(0.0, 4.0),
+                    r.right_bottom(),
+                    r.left_bottom(),
+                ],
+                stroke,
+            ));
+        }
+        Icon::Clip => {
+            p.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Inside);
+            p.line_segment(
+                [
+                    r.left_top() + egui::vec2(4.0, 0.0),
+                    r.left_bottom() + egui::vec2(4.0, 0.0),
+                ],
+                stroke,
+            );
+            p.line_segment(
+                [
+                    r.right_top() - egui::vec2(4.0, 0.0),
+                    r.right_bottom() - egui::vec2(4.0, 0.0),
+                ],
+                stroke,
+            );
+            for y in [r.top() + 5.0, r.bottom() - 5.0] {
+                p.line_segment([egui::pos2(r.left(), y), egui::pos2(r.right(), y)], stroke);
+            }
+        }
+        Icon::Library => {
+            for x in [r.left(), r.left() + 10.0] {
+                for y in [r.top(), r.top() + 10.0] {
+                    p.rect_stroke(
+                        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(7.0, 7.0)),
+                        1.0,
+                        stroke,
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
+        }
+        Icon::Project => {
+            for (y, offset) in [
+                (r.top() + 2.0, 5.0),
+                (r.center().y, 13.0),
+                (r.bottom() - 2.0, 8.0),
+            ] {
+                p.line_segment([egui::pos2(r.left(), y), egui::pos2(r.right(), y)], stroke);
+                p.circle_filled(egui::pos2(r.left() + offset, y), 2.5, color);
+            }
+        }
+        Icon::Close => {
+            p.line_segment([r.left_top(), r.right_bottom()], stroke);
+            p.line_segment([r.right_top(), r.left_bottom()], stroke);
+        }
     }
-    response.on_hover_text(label)
 }
 
 pub fn logo(ui: &mut egui::Ui) {

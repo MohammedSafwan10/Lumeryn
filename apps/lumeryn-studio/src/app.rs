@@ -10,6 +10,9 @@ use crate::{
 };
 use egui::{Color32, RichText, Sense, Stroke, Vec2};
 use egui_dock::{DockArea, DockState, TabViewer};
+use lumeryn_core::render::{
+    Acceleration, RenderOptions, RenderQuality, RenderResolution, VideoCodec,
+};
 use lumeryn_core::{Batch, Edit, MediaTools, Project};
 use lumeryn_preview::{PreviewConfig, PreviewPlayer};
 use lumeryn_service::ToolConfig;
@@ -37,6 +40,150 @@ impl Panel {
             Self::Diagnostics => "Diagnostics",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeftDrawer {
+    Media,
+    Library,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RightDrawer {
+    Clip,
+    Project,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RailSide {
+    Left,
+    Right,
+}
+#[derive(Debug, Clone, Copy)]
+struct Drawers {
+    left: Option<LeftDrawer>,
+    right: Option<RightDrawer>,
+    active: RailSide,
+}
+impl Default for Drawers {
+    fn default() -> Self {
+        Self {
+            left: Some(LeftDrawer::Media),
+            right: Some(RightDrawer::Clip),
+            active: RailSide::Left,
+        }
+    }
+}
+impl Drawers {
+    fn visible(self, compact: bool) -> (Option<LeftDrawer>, Option<RightDrawer>) {
+        if compact {
+            match self.active {
+                RailSide::Left => (self.left, None),
+                RailSide::Right => (None, self.right),
+            }
+        } else {
+            (self.left, self.right)
+        }
+    }
+    fn toggle_left(&mut self, drawer: LeftDrawer, compact: bool) {
+        self.left = if self.visible(compact).0 == Some(drawer) {
+            None
+        } else {
+            Some(drawer)
+        };
+        self.active = RailSide::Left;
+    }
+    fn toggle_right(&mut self, drawer: RightDrawer, compact: bool) {
+        self.right = if self.visible(compact).1 == Some(drawer) {
+            None
+        } else {
+            Some(drawer)
+        };
+        self.active = RailSide::Right;
+    }
+}
+
+#[derive(Debug)]
+struct EditorLayout {
+    left_rail: egui::Rect,
+    right_rail: egui::Rect,
+    left: Option<egui::Rect>,
+    right: Option<egui::Rect>,
+    preview: egui::Rect,
+    timeline: egui::Rect,
+}
+impl EditorLayout {
+    fn new(bounds: egui::Rect, drawers: Drawers) -> Self {
+        let rail_width = 68.0_f32.min(bounds.width() / 4.0);
+        let left_rail = egui::Rect::from_min_max(
+            bounds.min,
+            egui::pos2(bounds.left() + rail_width, bounds.bottom()),
+        );
+        let right_rail = egui::Rect::from_min_max(
+            egui::pos2(bounds.right() - rail_width, bounds.top()),
+            bounds.max,
+        );
+        let (left, right) = drawers.visible(bounds.width() < 1160.0);
+        let available = (bounds.width() - 2.0 * rail_width).max(0.0);
+        let left_width = if left.is_some() {
+            260.0_f32.min(available * 0.4)
+        } else {
+            0.0
+        };
+        let right_width = if right.is_some() {
+            280.0_f32.min(available * 0.4)
+        } else {
+            0.0
+        };
+        let left = left.map(|_| {
+            egui::Rect::from_min_max(
+                left_rail.right_top(),
+                egui::pos2(left_rail.right() + left_width, bounds.bottom()),
+            )
+        });
+        let right = right.map(|_| {
+            egui::Rect::from_min_max(
+                egui::pos2(right_rail.left() - right_width, bounds.top()),
+                right_rail.left_bottom(),
+            )
+        });
+        let stage = egui::Rect::from_min_max(
+            egui::pos2(left_rail.right() + left_width, bounds.top()),
+            egui::pos2(right_rail.left() - right_width, bounds.bottom()),
+        );
+        let timeline_height = (bounds.height() * 0.30)
+            .clamp(220.0, 264.0)
+            .min(bounds.height() * 0.45);
+        let preview = egui::Rect::from_min_max(
+            stage.min,
+            egui::pos2(stage.right(), stage.bottom() - timeline_height),
+        );
+        let timeline = egui::Rect::from_min_max(preview.left_bottom(), stage.max);
+        Self {
+            left_rail,
+            right_rail,
+            left,
+            right,
+            preview,
+            timeline,
+        }
+    }
+}
+
+fn seek_seconds(
+    position: u64,
+    rate: lumeryn_core::time::FrameRate,
+    seconds: i64,
+    total: u64,
+) -> u64 {
+    let frames = (u128::from(seconds.unsigned_abs()) * u128::from(rate.numerator())
+        + u128::from(rate.denominator()) / 2)
+        / u128::from(rate.denominator());
+    let delta = frames.min(u128::from(u64::MAX)) as u64;
+    let position = if seconds < 0 {
+        position.saturating_sub(delta)
+    } else {
+        position.saturating_add(delta)
+    };
+    position.min(total.saturating_sub(1))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,7 +229,9 @@ pub struct Session {
     pub render_busy: bool,
     active_job: Option<Uuid>,
     output_input: String,
+    render_options: RenderOptions,
     pub last_complete: Option<String>,
+    pub last_render: Option<Value>,
     pub artifacts: Vec<PathBuf>,
     pub ui_frames: u64,
     pub max_ui_ms: f64,
@@ -90,6 +239,7 @@ pub struct Session {
     frame_wait_until: Option<Instant>,
     pub timeline: Timeline,
     assets: Option<Assets>,
+    library: crate::library::Library,
     picker: Option<std::sync::mpsc::Receiver<Picked>>,
     pending_import: Option<(u64, PathBuf)>,
     selected_media: Option<Uuid>,
@@ -98,6 +248,7 @@ pub struct Session {
     volume: f32,
     pub viewport_size: Vec2,
     pub pixels_per_point: f32,
+    pub native_fullscreen: Option<bool>,
 }
 
 impl Session {
@@ -162,7 +313,20 @@ impl Session {
             render_busy: false,
             active_job: None,
             output_input: String::new(),
+            render_options: if options.smoke_uhd {
+                RenderOptions {
+                    resolution: RenderResolution::Uhd2160,
+                    fps: Some(60),
+                    codec: VideoCodec::H264,
+                    acceleration: Acceleration::Auto,
+                    quality: RenderQuality::Balanced,
+                    ..Default::default()
+                }
+            } else {
+                RenderOptions::default()
+            },
             last_complete: None,
+            last_render: None,
             artifacts: Vec::new(),
             ui_frames: 0,
             max_ui_ms: 0.0,
@@ -170,6 +334,11 @@ impl Session {
             frame_wait_until: None,
             timeline: Timeline::default(),
             assets,
+            library: crate::library::Library::new(
+                cc.egui_ctx.clone(),
+                options.library.clone(),
+                preview_tools.clone(),
+            ),
             picker: None,
             pending_import: None,
             selected_media: None,
@@ -178,6 +347,7 @@ impl Session {
             volume: 0.8,
             viewport_size: Vec2::ZERO,
             pixels_per_point: 1.0,
+            native_fullscreen: None,
         }
     }
 
@@ -266,6 +436,18 @@ impl Session {
         serde_json::json!({"thumbnails": thumbnails, "waveforms": waveforms, "failed_assets": failures, "complete": self.assets_ready()})
     }
     fn poll(&mut self, ctx: &egui::Context) {
+        for (path, epoch) in self.library.poll(ctx) {
+            if epoch == self.epoch {
+                if self.pending_import.is_none() {
+                    self.pending_import = Some((epoch, path));
+                } else {
+                    self.fail(
+                        "An import is pending. Try the library import again after it finishes."
+                            .into(),
+                    );
+                }
+            }
+        }
         let picked = self.picker.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(picked) = picked {
             self.picker = None;
@@ -390,6 +572,9 @@ impl Session {
                 }
                 Message::History(history) => self.history = history,
                 Message::Complete { label, value } => {
+                    if label == "Export" {
+                        self.last_render = Some(value.clone());
+                    }
                     if label == "Create project"
                         && let Some(path) = value.as_str()
                     {
@@ -526,10 +711,12 @@ impl Session {
             output,
             revision,
             job_id,
+            options: self.render_options.clone(),
         }) {
             self.render_busy = true;
             self.active_job = Some(job_id);
             self.last_complete = None;
+            self.last_render = None;
             true
         } else {
             false
@@ -537,6 +724,7 @@ impl Session {
     }
 
     fn toggle_play(&mut self) {
+        self.library.stop_audition();
         if let Some(preview) = &self.preview {
             let result = if preview.status().playing {
                 preview.pause()
@@ -555,6 +743,18 @@ impl Session {
             && let Err(error) = preview.step(delta)
         {
             self.fail(format!("Frame step: {error}"));
+        }
+    }
+
+    fn jump_seconds(&mut self, seconds: i64) {
+        if let Some(project) = &self.project {
+            let frame = seek_seconds(
+                self.playhead,
+                project.frame_rate,
+                seconds,
+                timeline::total_frames(project),
+            );
+            self.seek(frame);
         }
     }
 
@@ -840,7 +1040,7 @@ impl Session {
             Err(error) => self.fail(format!("Preview quality: {error}")),
         }
     }
-    fn preview_panel(&mut self, ui: &mut egui::Ui, expanded: &mut bool) {
+    fn preview_panel(&mut self, ui: &mut egui::Ui, fullscreen: &mut bool) {
         let size = Vec2::new(
             ui.available_width().max(40.0),
             (ui.available_height() - 98.0).max(40.0),
@@ -945,7 +1145,9 @@ impl Session {
                 self.seek(frame);
             }
         });
+        let roomy = ui.available_width() >= 720.0;
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
             let playing = self.preview.as_ref().is_some_and(|p| p.status().playing);
             if design::icon_button(
                 ui,
@@ -967,13 +1169,30 @@ impl Session {
             if design::icon_button(ui, design::Icon::First, "Go to start").clicked() {
                 self.seek(0);
             }
-            if design::icon_button(ui, design::Icon::Previous, "Previous frame · Left arrow")
+            if design::icon_button(ui, design::Icon::BackFive, "Back 5 seconds · Shift+Left")
                 .clicked()
             {
-                self.step(-1);
+                self.jump_seconds(-5);
             }
-            if design::icon_button(ui, design::Icon::Next, "Next frame · Right arrow").clicked() {
-                self.step(1);
+            if design::icon_button(
+                ui,
+                design::Icon::ForwardFive,
+                "Forward 5 seconds · Shift+Right",
+            )
+            .clicked()
+            {
+                self.jump_seconds(5);
+            }
+            if roomy {
+                if design::icon_button(ui, design::Icon::Previous, "Previous frame · Left arrow")
+                    .clicked()
+                {
+                    self.step(-1);
+                }
+                if design::icon_button(ui, design::Icon::Next, "Next frame · Right arrow").clicked()
+                {
+                    self.step(1);
+                }
             }
             let muted = self.monitor_muted || self.volume == 0.0;
             if design::icon_button(
@@ -1002,7 +1221,7 @@ impl Session {
                 self.update_volume();
             }
             ui.scope(|ui| {
-                ui.spacing_mut().slider_width = 88.0;
+                ui.spacing_mut().slider_width = if roomy { 88.0 } else { 54.0 };
                 ui.spacing_mut().slider_rail_height = 4.0;
                 ui.spacing_mut().interact_size.y = 16.0;
                 ui.visuals_mut().selection.bg_fill = design::ACCENT;
@@ -1028,16 +1247,24 @@ impl Session {
                 timecode((maximum + 1) as f64 / fps, false)
             ));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if design::icon_button(ui, design::Icon::Expand, "Expand preview").clicked() {
-                    *expanded = !*expanded;
+                if design::icon_button(
+                    ui,
+                    design::Icon::Expand,
+                    if *fullscreen {
+                        "Exit full screen · Escape"
+                    } else {
+                        "Full screen preview · F11"
+                    },
+                )
+                .clicked()
+                {
+                    *fullscreen = !*fullscreen;
                 }
                 self.quality_menu(ui);
             });
         });
     }
     fn inspector(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Clip").strong().size(17.0));
-        ui.add_space(8.0);
         let Some(project) = &self.project else {
             ui.label("Open a project to begin.");
             return;
@@ -1186,6 +1413,43 @@ impl Session {
                             .map_or(0, |c| c.source_in_frame);
                         self.trim(clip, source, duration);
                     }
+                    timeline::Action::Split { clip, at_frame } => {
+                        self.edit(
+                            Edit::SplitClip {
+                                clip_id: clip,
+                                right_clip_id: Uuid::new_v4(),
+                                at_frame,
+                            },
+                            "Split clip",
+                        );
+                    }
+                    timeline::Action::Duplicate(clip_id) => {
+                        self.edit(
+                            Edit::DuplicateClip {
+                                clip_id,
+                                id: Uuid::new_v4(),
+                            },
+                            "Duplicate clip",
+                        );
+                    }
+                    timeline::Action::Delete(clip_id) => {
+                        self.edit(
+                            Edit::DeleteClip {
+                                clip_id,
+                                ripple: true,
+                            },
+                            "Delete clip",
+                        );
+                    }
+                    timeline::Action::Reorder { clip, before } => {
+                        self.edit(
+                            Edit::ReorderClip {
+                                clip_id: clip,
+                                before_clip_id: before,
+                            },
+                            "Reorder clip",
+                        );
+                    }
                 }
             }
         } else {
@@ -1208,8 +1472,34 @@ impl Session {
                 "{} x {} - {} fps - revision {}",
                 project.width, project.height, project.frame_rate, project.revision
             ));
+            let current = (project.width, project.height);
+            let mut choice = current;
+            egui::ComboBox::from_id_salt("canvas-ratio")
+                .selected_text(format!("Canvas {} × {}", current.0, current.1))
+                .show_ui(ui, |ui| {
+                    for (size, label) in [
+                        ((1920, 1080), "Wide 16:9"),
+                        ((1080, 1920), "Vertical 9:16"),
+                        ((1080, 1080), "Square 1:1"),
+                        ((1440, 1080), "Classic 4:3"),
+                        ((1080, 1350), "Social 4:5"),
+                        ((2520, 1080), "Cinema 21:9"),
+                        ((1080, 1620), "Portrait 2:3"),
+                    ] {
+                        ui.selectable_value(&mut choice, size, label);
+                    }
+                });
             if let Some(path) = &self.database {
                 ui.label(path.display().to_string());
+            }
+            if choice != current {
+                self.edit(
+                    Edit::SetCanvas {
+                        width: choice.0,
+                        height: choice.1,
+                    },
+                    "Change canvas",
+                );
             }
         }
         ui.separator();
@@ -1241,13 +1531,112 @@ impl Session {
         design::section(
             ui,
             "Export your video",
-            "MP4 video - MPEG-4 + AAC audio - verified before completion",
+            "Local MP4 · no watermark · verified before completion",
         );
         if let Some(project) = &self.project {
             ui.label(format!(
                 "{} x {} - {} fps",
                 project.width, project.height, project.frame_rate
             ));
+        }
+        ui.add_enabled_ui(!self.render_busy, |ui| {
+            egui::ComboBox::from_id_salt("export-resolution")
+                .selected_text(match self.render_options.resolution {
+                    RenderResolution::Project => "Project resolution",
+                    RenderResolution::Hd720 => "720p",
+                    RenderResolution::Fhd1080 => "1080p",
+                    RenderResolution::Uhd2160 => "4K UHD",
+                })
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        (RenderResolution::Project, "Project resolution"),
+                        (RenderResolution::Hd720, "720p"),
+                        (RenderResolution::Fhd1080, "1080p"),
+                        (RenderResolution::Uhd2160, "4K UHD"),
+                    ] {
+                        ui.selectable_value(&mut self.render_options.resolution, value, label);
+                    }
+                });
+            egui::ComboBox::from_id_salt("export-fps")
+                .selected_text(
+                    self.render_options
+                        .fps
+                        .map_or_else(|| "Project frame rate".into(), |fps| format!("{fps} FPS")),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.render_options.fps, None, "Project frame rate");
+                    for fps in [24, 25, 30, 60] {
+                        ui.selectable_value(
+                            &mut self.render_options.fps,
+                            Some(fps),
+                            format!("{fps} FPS"),
+                        );
+                    }
+                });
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("export-codec")
+                    .selected_text(format!("{:?}", self.render_options.codec))
+                    .show_ui(ui, |ui| {
+                        for (codec, label) in [
+                            (VideoCodec::Mpeg4, "MPEG-4"),
+                            (VideoCodec::H264, "H.264"),
+                            (VideoCodec::H265, "H.265"),
+                        ] {
+                            ui.selectable_value(&mut self.render_options.codec, codec, label);
+                        }
+                    });
+                egui::ComboBox::from_id_salt("export-quality")
+                    .selected_text(format!("{:?}", self.render_options.quality))
+                    .show_ui(ui, |ui| {
+                        for (quality, label) in [
+                            (RenderQuality::Draft, "Draft"),
+                            (RenderQuality::Balanced, "Balanced"),
+                            (RenderQuality::High, "High"),
+                        ] {
+                            ui.selectable_value(&mut self.render_options.quality, quality, label);
+                        }
+                    });
+            });
+            egui::ComboBox::from_id_salt("export-acceleration")
+                .selected_text(match self.render_options.acceleration {
+                    Acceleration::Cpu => "Software encoder",
+                    Acceleration::Auto => "Automatic hardware + fallback",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.render_options.acceleration,
+                        Acceleration::Cpu,
+                        "Software encoder",
+                    );
+                    ui.selectable_value(
+                        &mut self.render_options.acceleration,
+                        Acceleration::Auto,
+                        "Automatic hardware + fallback",
+                    );
+                });
+            let mut custom_bitrate = self.render_options.bitrate_kbps.is_some();
+            if ui
+                .checkbox(&mut custom_bitrate, "Set video bitrate")
+                .changed()
+            {
+                self.render_options.bitrate_kbps = custom_bitrate.then_some(20_000);
+            }
+            if let Some(bitrate) = &mut self.render_options.bitrate_kbps {
+                ui.add(
+                    egui::DragValue::new(bitrate)
+                        .range(100..=200_000)
+                        .suffix(" kbps"),
+                );
+            }
+        });
+        if let Some(project) = &self.project {
+            let (width, height) = self.render_options.dimensions(project);
+            ui.label(
+                RichText::new(format!(
+                    "Output {width} × {height} · portrait follows the project canvas"
+                ))
+                .color(design::MUTED),
+            );
         }
         ui.add_space(8.0);
         ui.label("Save to a new file");
@@ -1305,7 +1694,10 @@ impl Session {
             .filter(|e| e.kind.starts_with("job_"))
             .take(6)
         {
-            ui.label(job_label(&event.kind));
+            ui.label(event.data.get("stage").and_then(Value::as_str).map_or_else(
+                || job_label(&event.kind).to_owned(),
+                |stage| format!("Export: {}", stage.replace('_', " ")),
+            ));
         }
     }
     fn activity(&mut self, ui: &mut egui::Ui) {
@@ -1354,6 +1746,11 @@ impl Session {
                             Some("import") => "Imported media",
                             Some("add_clip") => "Added a clip to the timeline",
                             Some("trim_clip") => "Adjusted a clip's trim",
+                            Some("split_clip") => "Split a clip",
+                            Some("duplicate_clip") => "Duplicated a clip",
+                            Some("delete_clip") => "Deleted a clip",
+                            Some("reorder_clip") => "Reordered clips",
+                            Some("set_canvas") => "Changed canvas size",
                             _ => "Project updated",
                         });
                     }
@@ -1377,6 +1774,12 @@ impl Session {
             "Measured locally. GPU memory usage is unknown.",
         );
         ui.label(&self.connection);
+        ui.label(format!("{} curated library assets", self.library.count()));
+        ui.label(match self.native_fullscreen {
+            Some(true) => "Native fullscreen active",
+            Some(false) => "Native windowed preview",
+            None => "Native fullscreen state unknown",
+        });
         if let Some(texture) = &self.texture {
             ui.label(&texture.adapter);
             ui.label(format!(
@@ -1479,8 +1882,9 @@ pub struct Studio {
     tools: DockState<Panel>,
     tools_open: bool,
     export_open: bool,
-    inspector_open: bool,
-    expanded: bool,
+    drawers: Drawers,
+    fullscreen: bool,
+    fullscreen_applied: bool,
     smoke: Option<Smoke>,
     capture: Option<Capture>,
     capture_frame: u64,
@@ -1497,6 +1901,9 @@ impl Studio {
             });
         }
         let mut session = Session::new(cc, &options);
+        if options.capture_only && options.capture_state == CaptureState::Library {
+            session.library.focus_images();
+        }
         if let Some(path) = &options.project {
             session.open(path.clone());
             session.playhead = options.capture_frame;
@@ -1521,9 +1928,33 @@ impl Studio {
             ]),
             tools_open: options.capture_only && options.capture_state == CaptureState::Tools,
             export_open: options.capture_only && options.capture_state == CaptureState::Export,
-            inspector_open: options.capture_only
-                && options.capture_state == CaptureState::Inspector,
-            expanded: false,
+            drawers: Drawers {
+                left: if options.capture_only && options.capture_state == CaptureState::Collapsed {
+                    None
+                } else if options.capture_only
+                    && matches!(
+                        options.capture_state,
+                        CaptureState::Library | CaptureState::LibraryAudio
+                    )
+                {
+                    Some(LeftDrawer::Library)
+                } else {
+                    Some(LeftDrawer::Media)
+                },
+                right: if options.capture_only && options.capture_state == CaptureState::Collapsed {
+                    None
+                } else {
+                    Some(RightDrawer::Clip)
+                },
+                active: if options.capture_only && options.capture_state == CaptureState::Inspector
+                {
+                    RailSide::Right
+                } else {
+                    RailSide::Left
+                },
+            },
+            fullscreen: options.capture_only && options.capture_state == CaptureState::Fullscreen,
+            fullscreen_applied: false,
             smoke,
             capture,
             capture_frame: options.capture_frame,
@@ -1532,7 +1963,6 @@ impl Studio {
         }
     }
     fn header(&mut self, ui: &mut egui::Ui) {
-        let compact = ui.available_width() < 1160.0;
         ui.horizontal(|ui| {
             design::logo(ui);
             ui.label(RichText::new("L U M E R Y N").strong().size(19.0));
@@ -1561,13 +1991,8 @@ impl Studio {
                     }
                     ui.separator();
                     if ui.button("Project details").clicked() {
-                        self.tools_open = true;
-                        self.tools = DockState::new(vec![
-                            Panel::Settings,
-                            Panel::History,
-                            Panel::Activity,
-                            Panel::Diagnostics,
-                        ]);
+                        self.drawers.right = Some(RightDrawer::Project);
+                        self.drawers.active = RailSide::Right;
                         ui.close();
                     }
                 })
@@ -1622,25 +2047,147 @@ impl Studio {
                     }
                     ui.separator();
                     if ui.button("Reset view").clicked() {
-                        self.expanded = false;
-                        self.inspector_open = false;
+                        self.fullscreen = false;
+                        self.drawers = Drawers::default();
                         self.session.timeline = Timeline::default();
                         ui.close();
                     }
                     ui.label(
                         RichText::new(
-                            "Space: play / pause\n← →: step one frame\nDrop files to import",
+                            "Space: play / pause\n← →: step one frame\nShift+← →: seek 5 seconds\nF11: full screen\nDrop files to import",
                         )
                         .small()
                         .color(design::MUTED),
                     );
                 });
-                if compact && ui.button("Clip").clicked() {
-                    self.inspector_open = !self.inspector_open;
-                }
             });
         });
     }
+
+    fn editor(&mut self, ui: &mut egui::Ui, bounds: egui::Rect) {
+        let compact = bounds.width() < 1160.0;
+        let (left_drawer, right_drawer) = self.drawers.visible(compact);
+        let layout = EditorLayout::new(bounds, self.drawers);
+        pane(ui, "left-rail", layout.left_rail, 4, |ui| {
+            if design::rail_button(
+                ui,
+                design::Icon::Media,
+                "My media",
+                left_drawer == Some(LeftDrawer::Media),
+            )
+            .clicked()
+            {
+                self.drawers.toggle_left(LeftDrawer::Media, compact);
+            }
+            if design::rail_button(
+                ui,
+                design::Icon::Library,
+                "Library",
+                left_drawer == Some(LeftDrawer::Library),
+            )
+            .clicked()
+            {
+                self.drawers.toggle_left(LeftDrawer::Library, compact);
+            }
+        });
+        pane(ui, "right-rail", layout.right_rail, 4, |ui| {
+            if design::rail_button(
+                ui,
+                design::Icon::Clip,
+                "Clip",
+                right_drawer == Some(RightDrawer::Clip),
+            )
+            .clicked()
+            {
+                self.drawers.toggle_right(RightDrawer::Clip, compact);
+            }
+            if design::rail_button(
+                ui,
+                design::Icon::Project,
+                "Project",
+                right_drawer == Some(RightDrawer::Project),
+            )
+            .clicked()
+            {
+                self.drawers.toggle_right(RightDrawer::Project, compact);
+            }
+        });
+        if let Some(rect) = layout.left {
+            pane(ui, "resource-drawer", rect, 12, |ui| {
+                if drawer_header(
+                    ui,
+                    if left_drawer == Some(LeftDrawer::Library) {
+                        "Content library"
+                    } else {
+                        "My media"
+                    },
+                ) {
+                    self.drawers.left = None;
+                }
+                match left_drawer {
+                    Some(LeftDrawer::Library) => {
+                        if self.session.library.show(
+                            ui,
+                            self.session.epoch,
+                            self.session.connected && !self.session.edit_busy,
+                        ) && let Some(preview) = &self.session.preview
+                            && let Err(error) = preview.pause()
+                        {
+                            self.session
+                                .fail(format!("Pause timeline for audition: {error}"));
+                        }
+                    }
+                    _ => self.session.media_panel(ui),
+                }
+            });
+        }
+        if let Some(rect) = layout.right {
+            pane(ui, "property-drawer", rect, 12, |ui| {
+                if drawer_header(
+                    ui,
+                    if right_drawer == Some(RightDrawer::Clip) {
+                        "Clip"
+                    } else {
+                        "Project"
+                    },
+                ) {
+                    self.drawers.right = None;
+                }
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match right_drawer {
+                        Some(RightDrawer::Clip) => self.session.inspector(ui),
+                        Some(RightDrawer::Project) => {
+                            self.session.settings(ui);
+                            ui.add_space(12.0);
+                            if ui.button("History & project tools").clicked() {
+                                self.tools_open = true;
+                            }
+                        }
+                        None => {}
+                    });
+            });
+        }
+        pane(ui, "preview", layout.preview, 12, |ui| {
+            self.session.preview_panel(ui, &mut self.fullscreen)
+        });
+        pane(ui, "timeline", layout.timeline, 8, |ui| {
+            self.session.timeline_panel(ui)
+        });
+        ui.advance_cursor_after_rect(bounds);
+    }
+}
+
+fn drawer_header(ui: &mut egui::Ui, title: &str) -> bool {
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).strong().size(17.0));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            close = design::icon_button(ui, design::Icon::Close, "Close sidebar").clicked();
+        });
+    });
+    ui.separator();
+    close
 }
 fn pane(
     ui: &mut egui::Ui,
@@ -1671,6 +2218,7 @@ impl eframe::App for Studio {
         let ctx = ui.ctx().clone();
         self.session.viewport_size = ctx.content_rect().size();
         self.session.pixels_per_point = ctx.pixels_per_point();
+        self.session.native_fullscreen = ctx.input(|input| input.viewport().fullscreen);
         self.session.ui_frames += 1;
         self.session.poll(&ctx);
         let dropped = ctx.input(|input| input.raw.dropped_files.clone());
@@ -1709,83 +2257,117 @@ impl eframe::App for Studio {
             }
         }
         if !ctx.egui_wants_keyboard_input() {
+            if !self.export_open
+                && !self.tools_open
+                && !self.fullscreen
+                && !self.session.edit_busy
+                && let Some(clip_id) = self.session.selected
+            {
+                if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+                    self.session.edit(
+                        Edit::DeleteClip {
+                            clip_id,
+                            ripple: true,
+                        },
+                        "Delete clip",
+                    );
+                } else if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::D)) {
+                    self.session.edit(
+                        Edit::DuplicateClip {
+                            clip_id,
+                            id: Uuid::new_v4(),
+                        },
+                        "Duplicate clip",
+                    );
+                } else if ctx.input(|i| !i.modifiers.command && i.key_pressed(egui::Key::S)) {
+                    self.session.edit(
+                        Edit::SplitClip {
+                            clip_id,
+                            right_clip_id: Uuid::new_v4(),
+                            at_frame: self.session.playhead,
+                        },
+                        "Split clip",
+                    );
+                }
+            }
             if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
                 self.session.toggle_play();
             }
             if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
-                self.session.step(-1);
+                if ctx.input(|i| i.modifiers.shift) {
+                    self.session.jump_seconds(-5);
+                } else {
+                    self.session.step(-1);
+                }
             }
             if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
-                self.session.step(1);
+                if ctx.input(|i| i.modifiers.shift) {
+                    self.session.jump_seconds(5);
+                } else {
+                    self.session.step(1);
+                }
             }
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.expanded = false;
+                if self.fullscreen {
+                    self.fullscreen = false;
+                } else if self.export_open {
+                    self.export_open = false;
+                } else if self.tools_open {
+                    self.tools_open = false;
+                } else {
+                    match self.drawers.active {
+                        RailSide::Left => self.drawers.left = None,
+                        RailSide::Right => self.drawers.right = None,
+                    }
+                }
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::F11))
+                && self
+                    .session
+                    .project
+                    .as_ref()
+                    .is_some_and(|project| !project.clips.is_empty())
+            {
+                self.fullscreen = !self.fullscreen;
             }
         }
         let mut bounds = ui.available_rect_before_wrap();
-        let header = egui::Rect::from_min_size(bounds.min, Vec2::new(bounds.width(), 58.0));
-        pane(ui, "header", header, 8, |ui| self.header(ui));
-        bounds.min.y = header.bottom();
-        if let Some(error) = self.session.error.clone() {
-            let r = egui::Rect::from_min_size(bounds.min, Vec2::new(bounds.width(), 44.0));
-            pane(ui, "error", r, 4, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button("Dismiss").clicked() {
-                        self.session.error = None;
-                    }
-                    ui.add(
-                        egui::Label::new(RichText::new(&error).color(design::WARNING)).truncate(),
-                    )
-                    .on_hover_text(&error);
-                });
+        if self.fullscreen {
+            pane(ui, "fullscreen-preview", bounds, 12, |ui| {
+                self.session.preview_panel(ui, &mut self.fullscreen)
             });
-            bounds.min.y = r.bottom();
-        }
-        let th = (bounds.height() * 0.30).clamp(240.0, 288.0);
-        let upper =
-            egui::Rect::from_min_max(bounds.min, egui::pos2(bounds.right(), bounds.bottom() - th));
-        let bottom =
-            egui::Rect::from_min_max(egui::pos2(bounds.left(), upper.bottom()), bounds.max);
-        let compact = bounds.width() < 1160.0;
-        if self.expanded {
-            pane(ui, "preview", upper, 20, |ui| {
-                self.session.preview_panel(ui, &mut self.expanded)
-            });
+            ui.advance_cursor_after_rect(bounds);
         } else {
-            let lw = (bounds.width() * 0.21).clamp(220.0, 330.0);
-            let rw = if compact {
-                0.0
-            } else {
-                (bounds.width() * 0.21).clamp(260.0, 330.0)
-            };
-            let left =
-                egui::Rect::from_min_max(upper.min, egui::pos2(upper.left() + lw, upper.bottom()));
-            let right =
-                egui::Rect::from_min_max(egui::pos2(upper.right() - rw, upper.top()), upper.max);
-            let center = egui::Rect::from_min_max(
-                egui::pos2(left.right(), upper.top()),
-                egui::pos2(right.left(), upper.bottom()),
-            );
-            pane(ui, "media", left, 18, |ui| self.session.media_panel(ui));
-            pane(ui, "preview", center, 18, |ui| {
-                self.session.preview_panel(ui, &mut self.expanded)
-            });
-            if !compact {
-                pane(ui, "inspector", right, 18, |ui| {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| self.session.inspector(ui));
+            let header = egui::Rect::from_min_size(bounds.min, Vec2::new(bounds.width(), 58.0));
+            pane(ui, "header", header, 8, |ui| self.header(ui));
+            bounds.min.y = header.bottom();
+            if let Some(error) = self.session.error.clone() {
+                let rect = egui::Rect::from_min_size(bounds.min, Vec2::new(bounds.width(), 44.0));
+                pane(ui, "error", rect, 4, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("Dismiss").clicked() {
+                            self.session.error = None;
+                        }
+                        ui.add(
+                            egui::Label::new(RichText::new(&error).color(design::WARNING))
+                                .truncate(),
+                        )
+                        .on_hover_text(&error);
+                    });
                 });
+                bounds.min.y = rect.bottom();
             }
+            self.editor(ui, bounds);
         }
-        pane(ui, "timeline", bottom, 12, |ui| {
-            self.session.timeline_panel(ui)
-        });
-        ui.advance_cursor_after_rect(bounds);
+        if self.fullscreen_applied != self.fullscreen {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+            self.fullscreen_applied = self.fullscreen;
+            ctx.request_repaint();
+        }
         if self.session.project.is_none() && !self.session.project_input.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
-        if self.export_open {
+        if self.export_open && !self.fullscreen {
             egui::Window::new("Export video")
                 .open(&mut self.export_open)
                 .collapsible(false)
@@ -1794,23 +2376,7 @@ impl eframe::App for Studio {
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                 .show(&ctx, |ui| self.session.render_panel(ui));
         }
-        if compact && self.inspector_open {
-            egui::Window::new("Clip inspector")
-                .open(&mut self.inspector_open)
-                .default_size(Vec2::new(
-                    300.0,
-                    (ctx.content_rect().height() - 100.0).clamp(340.0, 560.0),
-                ))
-                .anchor(egui::Align2::RIGHT_TOP, Vec2::new(-12.0, 70.0))
-                .max_height((ctx.content_rect().height() - 85.0).max(180.0))
-                .collapsible(false)
-                .show(&ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| self.session.inspector(ui));
-                });
-        }
-        if self.tools_open {
+        if self.tools_open && !self.fullscreen {
             egui::Window::new("Project tools")
                 .open(&mut self.tools_open)
                 .default_size(Vec2::new(700.0, 460.0))
@@ -1850,6 +2416,10 @@ impl eframe::App for Studio {
                 }
                 self.capture_seek_revision == Some(revision)
                     && self.session.last_frame == Some((revision, target))
+                    && (self.capture_state != CaptureState::Fullscreen
+                        || self.session.native_fullscreen == Some(true))
+                    && (self.capture_state != CaptureState::Library
+                        || self.session.library.thumbnail_count() > 0)
             } else {
                 false
             };
@@ -1895,5 +2465,78 @@ mod tests {
         for invalid in ["-1", "NaN", "inf", "01:60", "1:2:3", ""] {
             assert_eq!(parse_timecode(invalid), None);
         }
+    }
+
+    #[test]
+    fn drawer_toggles_restore_context_across_compact_layouts() {
+        let mut drawers = Drawers::default();
+        assert_eq!(drawers.visible(true), (Some(LeftDrawer::Media), None));
+        drawers.toggle_right(RightDrawer::Clip, true);
+        assert_eq!(drawers.visible(true), (None, Some(RightDrawer::Clip)));
+        assert_eq!(
+            drawers.visible(false),
+            (Some(LeftDrawer::Media), Some(RightDrawer::Clip))
+        );
+        drawers.toggle_right(RightDrawer::Project, true);
+        assert_eq!(drawers.visible(true), (None, Some(RightDrawer::Project)));
+        drawers.toggle_right(RightDrawer::Project, true);
+        assert_eq!(drawers.visible(true), (None, None));
+        drawers.toggle_left(LeftDrawer::Media, true);
+        assert_eq!(drawers.visible(true), (Some(LeftDrawer::Media), None));
+        drawers.toggle_left(LeftDrawer::Media, true);
+        assert_eq!(drawers.visible(true), (None, None));
+        drawers.toggle_left(LeftDrawer::Media, true);
+        assert_eq!(drawers.visible(true), (Some(LeftDrawer::Media), None));
+    }
+
+    #[test]
+    fn native_rail_layout_keeps_preview_and_timeline_reachable() {
+        for size in [
+            Vec2::new(1440.0, 842.0),
+            Vec2::new(1280.0, 742.0),
+            Vec2::new(980.0, 582.0),
+        ] {
+            for active in [RailSide::Left, RailSide::Right] {
+                let bounds = egui::Rect::from_min_size(egui::pos2(0.0, 58.0), size);
+                let layout = EditorLayout::new(
+                    bounds,
+                    Drawers {
+                        active,
+                        ..Default::default()
+                    },
+                );
+                for rect in [
+                    Some(layout.left_rail),
+                    Some(layout.right_rail),
+                    layout.left,
+                    layout.right,
+                    Some(layout.preview),
+                    Some(layout.timeline),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    assert!(bounds.contains_rect(rect));
+                }
+                assert!(layout.preview.width() >= 560.0);
+                assert!(layout.preview.height() >= 300.0);
+                assert!(layout.timeline.height() >= 220.0);
+                assert_eq!(layout.preview.bottom(), layout.timeline.top());
+                if size.x < 1160.0 {
+                    assert!(layout.left.is_none() || layout.right.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn five_second_seeks_use_rational_rate_and_clamp() -> lumeryn_core::Result<()> {
+        let rate = lumeryn_core::time::FrameRate::new(30_000, 1001)?;
+        assert_eq!(seek_seconds(200, rate, -5, 1000), 50);
+        assert_eq!(seek_seconds(200, rate, 5, 1000), 350);
+        assert_eq!(seek_seconds(10, rate, -5, 1000), 0);
+        assert_eq!(seek_seconds(990, rate, 5, 1000), 999);
+        assert_eq!(seek_seconds(990, rate, 5, 0), 0);
+        Ok(())
     }
 }

@@ -1,0 +1,4 @@
+Official provider: https://kenney.nl/assets/ui-audio
+Reviewed 2026-10-09. Provider listing identifies CC0, version1.0. Original License.txt retained byte-for-byte. Raw redistribution under CC0; no Kenney logo included.
+Archive URL: https://kenney.nl/media/pages/assets/ui-audio/490d233f68-1677590494/kenney_ui-audio.zip
+Archive SHA256: 946fc23a63d535d693eb31b2eabb80c8c28d6351e2186b344ceb71b2cb1d5eb6

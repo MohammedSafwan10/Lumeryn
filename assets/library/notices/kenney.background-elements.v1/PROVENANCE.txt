@@ -1,0 +1,4 @@
+Official provider: https://kenney.nl/assets/background-elements
+Reviewed 2026-10-09. Provider listing identifies CC0, version1.0. Original License.txt retained byte-for-byte. Raw redistribution under CC0; no Kenney logo included.
+Archive URL: https://kenney.nl/media/pages/assets/background-elements/b66a1ddec7-1677670395/kenney_background-elements.zip
+Archive SHA256: 31ffecec57bd51263f68e96e288ad06ac28eb1dfb41edb06b006a1b42cc10e41

@@ -62,6 +62,35 @@ pub enum Edit {
         source_in_frame: u64,
         duration_frames: u64,
     },
+    /// Split at an absolute interior timeline frame; the original ID remains on the left.
+    SplitClip {
+        clip_id: Uuid,
+        right_clip_id: Uuid,
+        at_frame: u64,
+    },
+    /// Insert a copy immediately after its source and ripple the contiguous sequence.
+    DuplicateClip {
+        clip_id: Uuid,
+        id: Uuid,
+    },
+    DeleteClip {
+        clip_id: Uuid,
+        #[serde(default = "default_ripple")]
+        ripple: bool,
+    },
+    /// Move within a contiguous sequence. None appends; all clip source ranges are retained.
+    ReorderClip {
+        clip_id: Uuid,
+        before_clip_id: Option<Uuid>,
+    },
+    SetCanvas {
+        width: u32,
+        height: u32,
+    },
+}
+
+fn default_ripple() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -228,7 +257,115 @@ impl Project {
                 clip.source_in_frame = *source_in_frame;
                 clip.duration_frames = *duration_frames;
             }
+            Edit::SplitClip {
+                clip_id,
+                right_clip_id,
+                at_frame,
+            } => {
+                let index = self.clip_index(*clip_id)?;
+                let original = &self.clips[index];
+                let offset = at_frame
+                    .checked_sub(original.at_frame)
+                    .filter(|offset| *offset > 0 && *offset < original.duration_frames)
+                    .ok_or_else(|| {
+                        Error::Invalid(
+                            "split must be strictly inside the clip's timeline range".into(),
+                        )
+                    })?;
+                let right = Clip {
+                    id: *right_clip_id,
+                    media_id: original.media_id,
+                    track_id: original.track_id,
+                    at_frame: *at_frame,
+                    source_in_frame: original
+                        .source_in_frame
+                        .checked_add(offset)
+                        .ok_or_else(|| Error::Invalid("split source overflow".into()))?,
+                    duration_frames: original.duration_frames - offset,
+                };
+                self.clips[index].duration_frames = offset;
+                self.clips.insert(index + 1, right);
+            }
+            Edit::DuplicateClip { clip_id, id } => {
+                self.require_contiguous()?;
+                let index = self.clip_index(*clip_id)?;
+                let mut duplicate = self.clips[index].clone();
+                duplicate.id = *id;
+                self.clips.insert(index + 1, duplicate);
+                self.reposition_contiguous()?;
+            }
+            Edit::DeleteClip { clip_id, ripple } => {
+                if *ripple {
+                    self.require_contiguous()?;
+                }
+                let index = self.clip_index(*clip_id)?;
+                self.clips.remove(index);
+                if *ripple {
+                    self.reposition_contiguous()?;
+                }
+            }
+            Edit::ReorderClip {
+                clip_id,
+                before_clip_id,
+            } => {
+                self.require_contiguous()?;
+                let index = self.clip_index(*clip_id)?;
+                if let Some(before) = before_clip_id {
+                    self.clip_index(*before)?;
+                    if *before == *clip_id {
+                        return Err(Error::Invalid("cannot reorder a clip before itself".into()));
+                    }
+                }
+                let clip = self.clips.remove(index);
+                let target = match before_clip_id {
+                    Some(before) => self.clip_index(*before)?,
+                    None => self.clips.len(),
+                };
+                self.clips.insert(target, clip);
+                self.reposition_contiguous()?;
+            }
+            Edit::SetCanvas { width, height } => {
+                self.width = *width;
+                self.height = *height;
+            }
         }
         self.validate()
+    }
+
+    fn clip_index(&self, id: Uuid) -> Result<usize> {
+        self.clips
+            .iter()
+            .position(|clip| clip.id == id)
+            .ok_or_else(|| Error::NotFound(format!("clip {id}")))
+    }
+
+    /// These operations never silently close gaps or resolve overlapping clips.
+    fn require_contiguous(&mut self) -> Result<()> {
+        self.clips.sort_by_key(|clip| clip.at_frame);
+        let mut expected = 0_u64;
+        for clip in &self.clips {
+            if clip.at_frame != expected {
+                return Err(Error::Unsupported(
+                    "operation requires a contiguous sequence starting at frame zero".into(),
+                ));
+            }
+            expected = expected
+                .checked_add(clip.duration_frames)
+                .filter(|end| *end <= MAX_FRAMES)
+                .ok_or_else(|| Error::Invalid("timeline overflow".into()))?;
+        }
+        Ok(())
+    }
+
+    fn reposition_contiguous(&mut self) -> Result<()> {
+        let mut at_frame = 0_u64;
+        for clip in &mut self.clips {
+            clip.at_frame = at_frame;
+            at_frame = at_frame
+                .checked_add(clip.duration_frames)
+                .filter(|end| *end <= MAX_FRAMES)
+                .ok_or_else(|| Error::Invalid("timeline overflow".into()))?;
+        }
+        Ok(())
     }
 }

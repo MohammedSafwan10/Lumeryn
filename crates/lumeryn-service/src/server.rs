@@ -134,10 +134,17 @@ impl Service {
             expected_revision,
             tools,
             job_id,
+            options,
         } = request
         {
             return self
-                .render(output, expected_revision, tools.try_into()?, job_id)
+                .render(
+                    output,
+                    expected_revision,
+                    tools.try_into()?,
+                    job_id,
+                    options,
+                )
                 .await;
         }
         if let Request::Execute {
@@ -291,7 +298,9 @@ impl Service {
         expected: Option<u64>,
         tools: MediaTools,
         job_id: Uuid,
+        options: render::RenderOptions,
     ) -> Result<Value> {
+        options.validate()?;
         let cancellation = Arc::new(Cancellation {
             cancelled: AtomicBool::new(false),
             notify: Notify::new(),
@@ -319,7 +328,7 @@ impl Service {
                 &mut state,
                 Some(project.revision),
                 "job_queued",
-                json!({"job_id":job_id}),
+                json!({"job_id":job_id,"options":options}),
             );
         }
         let work = async {
@@ -337,8 +346,21 @@ impl Service {
                     json!({"job_id":job_id}),
                 );
             }
+            let revision = project.revision;
+            let progress = |stage| async move {
+                let mut state = self.state.lock().await;
+                self.emit(
+                    &mut state,
+                    Some(revision),
+                    "job_progress",
+                    json!({"job_id":job_id,"stage":stage}),
+                );
+            };
             Ok(serde_json::to_value(
-                render::export(&project, &self.path, &output, &tools).await?,
+                render::export_with_progress(
+                    &project, &self.path, &output, &tools, &options, progress,
+                )
+                .await?,
             )?)
         };
         let cancelled = async {
@@ -352,10 +374,12 @@ impl Service {
         let result = tokio::select! {result=work=>result, ()=cancelled=>Err(Error::Io(std::io::Error::new(std::io::ErrorKind::Interrupted,"render cancelled")))};
         let mut state = self.state.lock().await;
         state.jobs.remove(&job_id);
-        let kind = if cancellation.cancelled.load(Ordering::Acquire) {
-            "job_cancelled"
-        } else if result.is_ok() {
+        // Successful publication is irrevocable. A late cancellation while waiting for
+        // this lock cannot turn an already verified output into a cancelled outcome.
+        let kind = if result.is_ok() {
             "job_completed"
+        } else if cancellation.cancelled.load(Ordering::Acquire) {
+            "job_cancelled"
         } else {
             "job_failed"
         };

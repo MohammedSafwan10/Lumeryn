@@ -4,6 +4,7 @@ mod backend;
 mod capture;
 mod design;
 mod gpu;
+mod library;
 mod smoke;
 mod timeline;
 
@@ -17,6 +18,10 @@ pub enum CaptureState {
     Inspector,
     Tools,
     Empty,
+    Library,
+    LibraryAudio,
+    Fullscreen,
+    Collapsed,
 }
 
 #[derive(Debug, Parser)]
@@ -26,9 +31,15 @@ pub struct Options {
     launch_started: Option<std::time::Instant>,
     #[arg(long)]
     project: Option<PathBuf>,
+    /// Optional curated offline library root (catalog.json and asset files).
+    #[arg(long)]
+    library: Option<PathBuf>,
     /// Scripted verification modifies the supplied test project; use a disposable fixture.
     #[arg(long, requires_all = ["project", "artifact_dir"])]
     smoke: bool,
+    /// Exercise Studio's real UHD/H.264/60 FPS/automatic encoder settings on a disposable project.
+    #[arg(long, requires = "smoke")]
+    smoke_uhd: bool,
     /// Capture an actual native UI state without editing the project.
     #[arg(long, requires = "artifact_dir", conflicts_with = "smoke")]
     capture_only: bool,

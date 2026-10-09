@@ -7,6 +7,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use lumeryn_core::{Error, MediaTools, Result, media::content_hash, time::FrameRate};
 use std::{
     collections::VecDeque,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -21,6 +22,7 @@ use tokio::{
 struct Buffer {
     samples: VecDeque<f32>,
     submitted: u64,
+    decoded: u64,
     timing: Option<(u64, u64, Instant)>,
     error: Option<String>,
 }
@@ -42,6 +44,50 @@ pub(crate) struct Output {
     task: tokio::task::JoinHandle<()>,
     start: u64,
 }
+
+enum Source {
+    Timeline(Plan, u64),
+    Audition(PathBuf, String),
+}
+
+struct Input {
+    path: PathBuf,
+    digest: String,
+    source_seconds: String,
+    duration: String,
+    audio: bool,
+    pad: bool,
+}
+impl Source {
+    fn inputs(self) -> Vec<Input> {
+        match self {
+            Self::Timeline(plan, start) => plan
+                .segments
+                .iter()
+                .filter(|segment| segment.at + segment.frames > start)
+                .map(|segment| {
+                    let offset = start.saturating_sub(segment.at);
+                    Input {
+                        path: segment.path.clone(),
+                        digest: segment.digest.clone(),
+                        source_seconds: plan.rate.seconds(segment.source_in + offset),
+                        duration: plan.rate.seconds(segment.frames - offset),
+                        audio: segment.audio,
+                        pad: true,
+                    }
+                })
+                .collect(),
+            Self::Audition(path, digest) => vec![Input {
+                path,
+                digest,
+                source_seconds: "0".into(),
+                duration: "30".into(),
+                audio: true,
+                pad: false,
+            }],
+        }
+    }
+}
 impl Output {
     pub fn start(
         plan: Plan,
@@ -50,10 +96,32 @@ impl Output {
         cancelled: watch::Receiver<u64>,
         volume: Arc<AtomicU32>,
     ) -> Result<Self> {
+        Self::start_source(
+            Source::Timeline(plan, start),
+            start,
+            tools,
+            cancelled,
+            volume,
+        )
+    }
+    pub fn audition(
+        path: PathBuf,
+        digest: String,
+        tools: MediaTools,
+        cancelled: watch::Receiver<u64>,
+        volume: Arc<AtomicU32>,
+    ) -> Result<Self> {
+        Self::start_source(Source::Audition(path, digest), 0, tools, cancelled, volume)
+    }
+    fn start_source(
+        source: Source,
+        start: u64,
+        tools: MediaTools,
+        cancelled: watch::Receiver<u64>,
+        volume: Arc<AtomicU32>,
+    ) -> Result<Self> {
         let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| Error::Unsupported("no native audio output device".into()))?;
+        let device = output_device(host.default_output_device())?;
         let supported = device
             .default_output_config()
             .map_err(|e| Error::Media(e.to_string()))?;
@@ -70,6 +138,7 @@ impl Output {
             buffer: Mutex::new(Buffer {
                 samples: VecDeque::with_capacity(capacity),
                 submitted: 0,
+                decoded: 0,
                 timing: None,
                 error: None,
             }),
@@ -94,7 +163,7 @@ impl Output {
         }?;
         let decode_shared = Arc::clone(&shared);
         let task = tokio::spawn(async move {
-            decode(plan, start, tools, decode_shared, cancelled).await;
+            decode(source, tools, decode_shared, cancelled).await;
         });
         Ok(Self {
             shared,
@@ -143,6 +212,22 @@ impl Output {
     pub fn error(&self) -> Option<String> {
         self.shared.buffer.lock().ok().and_then(|b| b.error.clone())
     }
+    pub fn metrics(&self) -> (u64, usize, usize, u64) {
+        self.shared
+            .buffer
+            .lock()
+            .map_or((0, 0, self.shared.capacity, 0), |buffer| {
+                let millis = (u128::from(heard_samples(&buffer, self.shared.rate, Instant::now()))
+                    * 1000
+                    / u128::from(self.shared.rate)) as u64;
+                (
+                    millis,
+                    buffer.samples.len(),
+                    self.shared.capacity,
+                    buffer.decoded,
+                )
+            })
+    }
     pub fn finished(&self) -> bool {
         self.shared.finished.load(Ordering::Acquire)
             && self.shared.buffer.lock().is_ok_and(|b| {
@@ -150,6 +235,10 @@ impl Output {
                     && heard_samples(&b, self.shared.rate, Instant::now()) == b.submitted
             })
     }
+}
+
+fn output_device(device: Option<cpal::Device>) -> Result<cpal::Device> {
+    device.ok_or_else(|| Error::Unsupported("no native audio output device".into()))
 }
 impl Drop for Output {
     fn drop(&mut self) {
@@ -244,25 +333,23 @@ fn write_samples<T: cpal::Sample + cpal::FromSample<f32>>(
 }
 
 async fn decode(
-    plan: Plan,
-    start: u64,
+    source: Source,
     tools: MediaTools,
     shared: Arc<Shared>,
     mut cancelled: watch::Receiver<u64>,
 ) {
     let work = async {
-        for segment in plan.segments.iter().filter(|s| s.at + s.frames > start) {
+        for segment in source.inputs() {
             if content_hash(&segment.path).await? != segment.digest {
                 return Err(Error::Invalid(
                     "audio preview source changed; reimport media".into(),
                 ));
             }
-            let offset = start.saturating_sub(segment.at);
-            let duration = plan.rate.seconds(segment.frames - offset);
+            let duration = segment.duration;
             let mut args = base_args();
             if segment.audio {
                 args.extend(["-threads".into(), "2".into(), "-protocol_whitelist".into(), "file".into(), "-i".into(), segment.path.as_os_str().to_owned(), "-map".into(), "0:a:0".into(), "-vn".into(), "-af".into(),
-                    format!("atrim=start={}:duration={duration},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration={duration}", plan.rate.seconds(segment.source_in + offset)).into()]);
+                    format!("atrim=start={}:duration={duration},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo{}", segment.source_seconds,if segment.pad {format!(",apad,atrim=duration={duration}")} else {String::new()}).into()]);
             } else {
                 args.extend([
                     "-f".into(),
@@ -315,6 +402,7 @@ async fn decode(
                         buffer
                             .samples
                             .extend(samples[at..at + count].iter().copied());
+                        buffer.decoded += count as u64;
                         at += count;
                     }
                     if at < samples.len() {
@@ -347,10 +435,151 @@ async fn decode(
 mod tests {
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn missing_device_is_explicit() {
+        assert!(
+            matches!(output_device(None),Err(Error::Unsupported(message)) if message=="no native audio output device")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires installed FFmpeg; actual bounded standalone PCM decoding, no audio device"]
+    async fn audition_decode_is_thirty_second_bounded_and_cancellable() -> Result<()> {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.lumeryn-scratch/media");
+        std::fs::create_dir_all(&root)?;
+        let dir = tempfile::tempdir_in(root)?;
+        let path = dir.path().join("tone.wav");
+        let tools = MediaTools {
+            ffmpeg: std::env::var_os("LUMERYN_FFMPEG")
+                .map_or_else(|| "ffmpeg".into(), PathBuf::from),
+            ..Default::default()
+        };
+        let result = tokio::process::Command::new(&tools.ffmpeg)
+            .args([
+                "-hide_banner",
+                "-v",
+                "error",
+                "-nostdin",
+                "-n",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=8000",
+                "-t",
+                "40",
+                "-c:a",
+                "pcm_s16le",
+            ])
+            .arg(&path)
+            .output()
+            .await?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let digest = content_hash(&path).await?;
+        let shared = Arc::new(Shared {
+            buffer: Mutex::new(Buffer {
+                samples: VecDeque::with_capacity(2000),
+                submitted: 0,
+                decoded: 0,
+                timing: None,
+                error: None,
+            }),
+            playing: AtomicBool::new(false),
+            underruns: AtomicU64::new(0),
+            rate: 8000,
+            channels: 1,
+            capacity: 2000,
+            finished: AtomicBool::new(false),
+            consumed: Notify::new(),
+            volume: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+        });
+        let (cancel, receiver) = watch::channel(0);
+        let task = tokio::spawn(decode(
+            Source::Audition(path.clone(), digest.clone()),
+            tools.clone(),
+            Arc::clone(&shared),
+            receiver,
+        ));
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(
+            shared
+                .buffer
+                .lock()
+                .map_err(|_| Error::Media("test queue poisoned".into()))?
+                .samples
+                .len(),
+            2000
+        );
+        assert!(!shared.finished.load(Ordering::Acquire));
+        cancel.send_replace(1);
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .map_err(|_| Error::Timeout)?
+            .map_err(|error| Error::Media(error.to_string()))?;
+        {
+            let mut buffer = shared
+                .buffer
+                .lock()
+                .map_err(|_| Error::Media("test queue poisoned".into()))?;
+            buffer.samples.clear();
+            buffer.decoded = 0;
+        }
+        let (_cancel, receiver) = watch::channel(0);
+        let task = tokio::spawn(decode(
+            Source::Audition(path.clone(), digest.clone()),
+            tools,
+            Arc::clone(&shared),
+            receiver,
+        ));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !shared.finished.load(Ordering::Acquire) {
+                {
+                    let mut buffer = shared
+                        .buffer
+                        .lock()
+                        .map_err(|_| Error::Media("test queue poisoned".into()))?;
+                    assert!(buffer.samples.len() <= 2000);
+                    assert!(buffer.samples.iter().all(|sample| sample.is_finite()));
+                    buffer.samples.clear();
+                }
+                shared.consumed.notify_one();
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                if let Some(error) = shared
+                    .buffer
+                    .lock()
+                    .map_err(|_| Error::Media("test queue poisoned".into()))?
+                    .error
+                    .clone()
+                {
+                    return Err(Error::Media(error));
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| Error::Timeout)??;
+        task.await
+            .map_err(|error| Error::Media(error.to_string()))?;
+        assert_eq!(
+            shared
+                .buffer
+                .lock()
+                .map_err(|_| Error::Media("test queue poisoned".into()))?
+                .decoded,
+            30 * 8000
+        );
+        assert_eq!(content_hash(&path).await?, digest);
+        Ok(())
+    }
     fn pcm_buffer() -> Buffer {
         Buffer {
             samples: [0.75, -0.5, 0.25, -1.0].into(),
             submitted: 480,
+            decoded: 4,
             timing: None,
             error: None,
         }
@@ -395,6 +624,7 @@ mod tests {
         let mut malformed = Buffer {
             samples: [f32::NAN, f32::INFINITY, 5.0, -5.0].into(),
             submitted: 0,
+            decoded: 4,
             timing: None,
             error: None,
         };
@@ -411,6 +641,7 @@ mod tests {
         let buffer = Buffer {
             samples: VecDeque::new(),
             submitted: 480,
+            decoded: 0,
             timing: Some((0, 480, now + Duration::from_millis(10))),
             error: None,
         };

@@ -1,0 +1,4 @@
+Official provider: https://kenney.nl/assets/interface-sounds
+Reviewed 2026-10-09. Provider listing identifies CC0, version1.0. Original License.txt retained byte-for-byte. Raw redistribution under CC0; no Kenney logo included.
+Archive URL: https://kenney.nl/media/pages/assets/interface-sounds/fa43c1dd4d-1677589452/kenney_interface-sounds.zip
+Archive SHA256: f2193d072726d6758a5f7871b2dcc54dcce0d5c35c6f0a62f92549b327c81232

@@ -1,5 +1,7 @@
 # Native desktop dependency review
 
+The curated catalogue adds direct `sha2 = 0.10.9` in the core for streamed SHA256 verification. This exact version already existed in the resolved lockfile and is MIT OR Apache-2.0; no dependency upgrade or additional runtime is introduced. Final lockfile/cargo-deny evidence is in NATIVE_INVENTORY.md. Retain its selected upstream notice when distributing binaries, alongside the separate CC0/OFL asset notices.
+
 Reviewed 2026-10-09 against the resolved workspace and current official terms. Original Lumeryn source remains unpublished proprietary code. Cargo-deny checks metadata; this review records obligations that metadata alone cannot establish. Packaging/model/codec distribution remains separately gated.
 
 Native selections: egui/eframe/egui-wgpu 0.36.2 and wgpu 30.0.1 use MIT OR Apache-2.0; egui_dock 0.21.1 uses MIT; CPAL 0.18.2 uses Apache-2.0; image 0.25.10 uses MIT OR Apache-2.0. Retain the selected upstream license/copyright notices in binary distribution. The locked graph has one egui and one wgpu version; other platform-specific duplicates are warning-level and reviewed in the refreshed [resolved native inventory](NATIVE_INVENTORY.md). Rust1.97.1 satisfies the selected crates' toolchain requirement. Final B-redesign locked source/media/dependency gates and native Windows workflows passed; see [executed acceptance](../testing/STUDIO_REDESIGN.md). Physical/manual checks remain staged.

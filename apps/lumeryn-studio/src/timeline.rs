@@ -8,6 +8,10 @@ pub enum Action {
     Select(Uuid),
     Seek(u64),
     Trim { clip: Uuid, duration: u64 },
+    Split { clip: Uuid, at_frame: u64 },
+    Duplicate(Uuid),
+    Delete(Uuid),
+    Reorder { clip: Uuid, before: Option<Uuid> },
 }
 
 #[derive(Debug)]
@@ -277,6 +281,17 @@ impl Timeline {
                 let body = body.on_hover_text("Click to select · double-click to seek · drag the right edge to trim. Images are a representative source frame.");
                 if body.clicked() { actions.push(Action::Select(clip.id)); }
                 if body.double_clicked() { actions.push(Action::Seek(clip.at_frame)); }
+                body.context_menu(|ui| {
+                    if ui.add_enabled(clip.at_frame < playhead && playhead < clip.at_frame + clip.duration_frames, egui::Button::new("Split at playhead   S")).clicked() { actions.push(Action::Split { clip: clip.id, at_frame: playhead }); ui.close(); }
+                    if ui.button("Duplicate   Ctrl+D").clicked() { actions.push(Action::Duplicate(clip.id)); ui.close(); }
+                    if ui.button("Delete and close gap   Del").clicked() { actions.push(Action::Delete(clip.id)); ui.close(); }
+                    ui.separator();
+                    if ui.button("Move to beginning").clicked() {
+                        let before = project.clips.iter().min_by_key(|item| item.at_frame).map(|item| item.id);
+                        actions.push(Action::Reorder { clip: clip.id, before }); ui.close();
+                    }
+                    if ui.button("Move to end").clicked() { actions.push(Action::Reorder { clip: clip.id, before: None }); ui.close(); }
+                });
                 if block.width() > 10.0 {
                     let edge = Rect::from_min_max(pos2(block.right()-8.0, block.top()), block.right_bottom());
                     let handle = ui.interact(edge.intersect(viewport), ui.id().with((clip.id,"trim")), Sense::drag());

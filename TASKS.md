@@ -2,21 +2,21 @@
 
 ## Owner's18-image Clipchamp feature plan
 
-First deliverable is the complete inventory, not editor-parity implementation. Canonical scope/dependencies: [feature inventory](docs/roadmap/CLIPCHAMP_FEATURE_INVENTORY.md); ADR0014. Both CLI and Studio use the same typed Rust operations. Current B functionality remains verified and preserved; new features need their own gates. Library download/quality/placement follows reviewed redistribution rights; no raw Clipchamp stock.
+The owner has authorized implementation of all eighteen references. Deliver and verify the missing capabilities incrementally; the completed inventory is the scope contract, not editor-parity acceptance. Canonical scope/dependencies: [feature inventory](docs/roadmap/CLIPCHAMP_FEATURE_INVENTORY.md); ADR0014. Both CLI and Studio use the same typed Rust operations. Current B functionality remains verified and preserved; new features need their own gates. Library download/quality/placement follows reviewed redistribution rights; no raw Clipchamp stock.
 
 | ID | Priority / dependencies | Owner / scope | Acceptance | Status / evidence |
 |---|---|---|---|---|
 | CC-00 | P0 / none | Lead + UI/engine/licensing specialists | 18-image audit, official research, current gaps and library rights | DONE; inventory/three specialist reports/ADR0014; documentation only |
-| CC-01 | P0 /00 | UI / native shell | Two rails + drawers over supported controls; compact/fullscreen/focus and baseline native gates | NEXT; no implementation yet |
-| CC-02 | P0 /00 | Core/service/CLI + UI | Shared baseline evaluator and atomic split/duplicate/delete/move/reorder/ripple; dry-run/conflict/source/output tests | TODO |
+| CC-01 | P0 /00 | UI / native shell | Two rails + drawers over supported controls; compact/fullscreen/focus and baseline native gates | IMPLEMENTED; native rails, compact drawers, actual OS fullscreen and baseline captures; final integrated evidence in CLIPCHAMP_FOUNDATION |
+| CC-02 | P0 /00 | Core/service/CLI + UI | Shared baseline evaluator and atomic split/duplicate/delete/move/reorder/ripple; dry-run/conflict/source/output tests | PARTIAL; split/duplicate/ripple-delete/reorder implemented through core/service/CLI/Studio; 5 Store tests. General drag/move/snapping/gap composition remain staged |
 | CC-03 | P0 /02 | Storage/service + UI | Monotonic undo/redo, versioned clipboard, aliases/project-only removal; two-client/legacy tests | TODO |
 | CC-04 | P0 /02–03 | Composition/audio specialists | Versioned tracks/layers/gaps and shared evaluator; independent audio gain/mute/detach/mix/fades; migration/A/V parity | TODO |
-| CC-05 | P0 /00;04 placement | Library/licensing + CLI/UI | Reviewed free pack downloads, hashes/notices/listening, stableIDs/search/preview, both-client placement; actual size measured | TODO; download authorization persists; no files downloaded yet |
-| CC-06 | P0 /04 | Compositor + UI | Seven canvas ratios, fit/crop/background, images/transforms/overlays, shared preview/export | TODO |
+| CC-05 | P0 /00;04 placement | Library/licensing + CLI/UI | Reviewed free pack downloads, hashes/notices/listening, stableIDs/search/preview, both-client placement; actual size measured | PARTIAL; 352 reviewed files (240 audio,110 PNG,2 fonts), paginated CLI discovery/check, native search/thumbnails/30s audition/source import. Independent timeline placement and subjective music fit remain staged |
+| CC-06 | P0 /04 | Compositor + UI | Seven canvas ratios, fit/crop/background, images/transforms/overlays, shared preview/export | PARTIAL; seven canvas ratios through shared typed command and Studio. Images import as sources; holds/transforms/overlays still staged |
 | CC-07 | P0 /04,06 | Typography/creative + CLI/UI | Early native editable text/vectors/scenes/keyframes and original titles/templates; multilingual/golden/export/explainer evidence | TODO; preserves C1–C6 priority |
 | CC-08 | P1 /04,06 | Render + UI | Colour/filter intensity/reset/opacity/blend/fades and original preset previews; typed/golden parity | TODO |
 | CC-09 | P1 /04,06 | Timeline/media + UI | Transition duration/handles, rational speed/audio policy/freeze; exact endpoint/pixel/sample tests | TODO |
-| CC-10 | P0 /04;06–09 outputs | Media + CLI/UI | Local480/720/1080p/measured4K/audio-only/presets/progress/cancel; decoded verification | TODO |
+| CC-10 | P0 / baseline now;04,06–09 full composition | Media + CLI/UI | Unrestricted local UHD/portrait24/25/30/60,720/1080p,codec/bitrate/quality/hardware fallback/progress/cancel; decoded verification | PARTIAL; implemented baseline final-source UHD/H264/H265/settings/schema/stage events and 4 actual media tests. Audio-only,480p and future scene/effect parity remain staged |
 | CC-11 | P1 /07,audio | Text/model + CLI/UI | Editable manual SRT/VTT then optional transcription/transcriptFTS; timing/language/licence/render tests | TODO |
 | CC-12 | P1 /04,05 | Platform/audio | Screen/window/camera/mic/combined capture and optional licensedTTS; permissions/stop/cancel/sync/immutable assets | TODO |
 | CC-13 | P2 /04,10–12 | Model/resources | Reviewable auto-cut/silence proposals, optional denoise/upscale; licence/device/budget/cancel/derived-asset tests | TODO |
