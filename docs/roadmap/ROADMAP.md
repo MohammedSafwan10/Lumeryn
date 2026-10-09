@@ -2,7 +2,7 @@
 
 The complete Phase 0–12 roadmap and exit criteria are preserved in PRODUCT_SPEC sections 36–40. First execution spans Phase 1 and the basic Phase 2 export, while Phase 0 preview/GPU/IPC experiments remain explicitly open.
 
-Next: authenticated shared service (Phase 3) before synchronized native egui/eframe Studio (Phase 4). Then native effects/caching, media intelligence, optional voice, advanced model effects, Blender, professional editing, measured optimization, and proprietary release. Release requires owner review of business identity/trademark/IP, binary/model/codec/asset obligations, notices, security, installer and updates. No roadmap item implies shipped support.
+The authenticated shared service and synchronized native Studio foundation are implemented and verified as scoped in PROGRESS. Next delivery follows the owner's18-image [Clipchamp feature plan](CLIPCHAMP_FEATURE_INVENTORY.md): native rail organisation and basic typed editing/undo, composition/audio, then early text/scenes alongside licensed library preparation. Effects/caching, media intelligence, optional voice/model tools, Blender, measured optimization and proprietary release follow their dependencies. Release requires owner review of business identity/trademark/IP, binary/model/codec/asset obligations, notices, security, installer and updates. No roadmap item implies shipped support.
 
 ## Owner priority update — 2026-10-09
 
@@ -23,4 +23,9 @@ Immediately after reliable timeline/render/CLI and live Studio synchronization, 
 
 For every demo record measured completion time, required human interventions, actual visual/audio errors, peak hardware resource use, render failures/retries and final integrity. No subjective synthetic quality score, audience-growth or monetization guarantee. Optional Manim/Motion Canvas/Lottie/formula backends require official licensing and unattended Windows execution prototypes; preserve scene source/parameters on the same timeline. They are not prerequisites for native scenes or ordinary editing.
 
-Database next steps: global app storage when model/settings/benchmark APIs exist; transcript FTS when transcription exists; benchmark vector candidates before selection. Audio next step is offline sample-index mixing/WAV/waveforms before CPAL; typography starts with CPU reference consistency before GPU. Distribution and signed updates remain Phase 12, not part of this CLI milestone.
+Database next steps: global app storage when model/settings/benchmark APIs exist; transcript FTS when transcription exists; benchmark vector candidates before selection. CPAL monitor output is implemented; audio next step is the shared offline sample-index mixer, independent tracks/fades and WAV export; typography starts with CPU reference consistency before GPU. Distribution and signed updates remain Phase 12, not part of this CLI milestone.
+
+
+## Owner interaction/library clarification —2026-10-09
+
+[CC-00–14](CLIPCHAMP_FEATURE_INVENTORY.md) is the canonical next-feature sequence after verified B. Preserve the C1–C8 semantic creative roadmap; title/scene templates instantiate original editable objects. Recorder/TTS/transcription/upscale runtimes remain optional. The reference's account/purchase/cloud UI does not change local-first requirements. First inventory is complete; rails, missing engine features and asset downloads are not shipped yet. See ADR0014 and the three linked research reports for exact observed/proposed scope and licensing.

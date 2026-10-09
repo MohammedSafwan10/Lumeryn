@@ -1,0 +1,31 @@
+# ADR0014: Native two-rail editor navigation and shared capability rollout
+
+Date:2026-10-09. Status: accepted interaction direction and staged delivery plan; new features and asset downloads not implemented in this first inventory milestone.
+
+## Context
+
+After the verified B interface at `d6e5940`, the owner supplied18Clipchamp reference screenshots and requested a complete missing-feature list first, then incremental native engineering with subagents and commercially usable prebuilt audio/assets. The requested interaction has left creation/library navigation and right selection properties with expandable drawers. The Rust/local-first/agent-native requirements persist. This is an explicit owner refinement of interface organisation, not authorization to replace the graph, copy proprietary media or require cloud accounts.
+
+## Decision
+
+Adopt native left/right icon rails and one contextual drawer on each side over the existing egui/eframe/wgpu viewport and timeline. Preserve Lumeryn branding/mint tokens and supported B controls. Left destinations become My media, Record/create, Content library, Templates, Text and Transitions as each real capability ships. Right destinations become clip properties, captions, audio, fades, filters, effects, colour and speed, with optional upscale controls when installed/supported. The selected object and discovered capabilities determine available actions. Do not add decorative enabled tabs while their backing actions are unimplemented. Actual native fullscreen differs from the existing expanded preview and needs its own focus/Escape workflow.
+
+At compact widths keep icon rails accessible, collapse drawers intentionally and open the selected drawer as a reachable overlay; preserve readable central preview/transport and timeline, with intentional scrolling. Keyboard focus, shortcut conflicts/text-entry exclusion,100/150/200%DPI, menus, drag targets and error states have per-slice acceptance. A desktop launch or concept screenshot alone is insufficient.
+
+Persisted editing remains typed Rust graph/service commands with integer/rational time, revisions/idempotency/batches, live events and inspectable schemas/capabilities. Both CLI and Studio receive each new command family. Basic contiguous edits precede broader track/layer changes; shared window-independent timeline/source-time evaluation is required before expanded composition. Versioned graph/history decoding and explicit consistent backup/migration preserve prior projects and receipt semantics. Undo/redo records new revisions rather than rewinding/deleting history. Preview/export use the same semantic evaluation and compare decoded pixel/sample output.
+
+The canonical sequence is [CC-00–14](../roadmap/CLIPCHAMP_FEATURE_INVENTORY.md). Early editable text/scenes/explainers remain ahead of optional recording/AI breadth. Reuse audited FFmpeg/native workers and existing wgpu device instead of selecting new low-level backends without measurement. No dependency/backend or model is added by this planning decision.
+
+Prepare a small offline starter library with stable pack/asset IDs, exact provider/licence/version/provenance and checksums. CC0 cue/music candidates, unmodified OFL fonts and selected ISC/MIT SVGs are proposed for later measured download/quality acceptance. Original Lumeryn text/scene templates instantiate editable objects on the same project. Install/search/preview metadata can be shared by both clients; placing an asset dispatches ordinary authoritative edits. Media/pack/model bytes remain filesystem assets. A small versioned pack manifest/index can precede the staged global app database; do not make a cloud database necessary. Optional packs stay outside the minimal install unless measured default size/benefit supports including a curated subset.
+
+Downloads of reviewed free packs are already owner-authorized, but none occurred during this first list milestone. Capture exact archive licences/hash/byte size, inspect/listen to selected files, validate paths/limits before unpacking, retain notices and give downstream users required attribution data. Library/runtime licence does not establish pretrained-model/voice/font/asset rights. No paid provider, charge, upload or publication is authorized implicitly. No raw Clipchamp stock, copied title presets or branding is selected.
+
+## Evidence and alternatives
+
+[18-image UI audit](../research/CLIPCHAMP_UI_REVIEW.md), [engine plan](../research/EDITOR_FEATURE_ENGINE_PLAN.md), [asset/licensing plan](../research/BUILTIN_ASSET_LIBRARY.md) contain official current sources and measured-versus-unmeasured boundaries. [Microsoft editing index](https://support.microsoft.com/en-us/clipchamp/video-editing-features) confirms reference feature families. [Microsoft stock terms](https://support.microsoft.com/en-us/clipchamp/how-to-add-stock-music-and-audio-to-videos) exclude raw stock reuse in other editors. [Kenney support](https://kenney.nl/support) and [CC0 terms](https://creativecommons.org/publicdomain/zero/1.0/legalcode.en) support reviewed redistribution candidates; exact archive/quality checks remain pending.
+
+Keeping only the B fixed panels would preserve a simple initial surface but does not match the owner's requested tool organisation. Rebuilding as a browser application would violate the native decision. Copying an entire stock catalogue without raw redistribution rights is unsuitable. A second media/editor graph or generic raw FFmpeg filter-string interface would break authoritative semantics and agent discoverability. Native rails over incremental typed capabilities fit the current architecture; the trade-off is genuine implementation/migration/testing work beyond a visual reskin.
+
+## Acceptance
+
+CC-00 accepts the source/image/official-document inventory, licensing candidate distinctions and task dependencies. This planning milestone does not add new test or performance results. Existing62tests/native evidence verify B only. CC-01 must pass current source/media/dependency gates and actual native three-size workflow/captures while preserving supported actions. Later slices require CLI/Studio revision parity, source integrity, preview/export decoded parity, recovery/cancellation and representative resource benchmarks. Model-based super-resolution and ordinary scaling/export4K must be labeled separately.

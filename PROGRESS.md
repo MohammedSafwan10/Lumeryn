@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-10-09 —18-image Clipchamp inventory and native delivery plan
+
+Owner supplied11screenshots, then7additional property/text/record/media states and asked first for the complete missing-feature list. Three independent specialists inspected all18images, audited current engine/UI and researched current official documentation and raw-asset redistribution rights. Lead consolidated the per-image inventory, complete capability gaps, canonical CC-00–14 dependency order and ADR0014. Product spec/architecture/task board now record the requested native left/right icon rails and expandable drawers over the existing Rust service.
+
+Audit distinguishes real import/preview/trim/live revisions/monitor gain/export from absent clip gain, independent audio/layers, split/delete/move/undo, text/scenes, transforms, filters/transitions/speed, recording/TTS/captions/library/upscale/export choices. Landscape/Portrait/Square exist only for CLI project creation; native expanded preview is not fullscreen. Current62-test/B acceptance at `d6e5940` remains historical evidence, not a test of new planned features.
+
+Asset research identified CC0 Kenney cue/jingle packs and individually licensed CC0 music-loop candidates, unmodified OFL Inter and selected ISC/MIT Lucide SVGs. Exact download sizes/hashes/listening/visual acceptance remain unmeasured; no downloads occurred during this inventory milestone. Clipchamp raw stock cannot be reused in another editor; Pixabay/Pexels raw-library terms are unsuitable for this starter. Remix's2026custom licence requires different review from older permissive assumptions. Original Lumeryn editable templates and same assetIDs/search/import commands serve users and external agents. Free reviewed downloads remain authorized for the implementation phase.
+
+Documentation/source-state/reference completeness checks passed; no Rust code, dependencies, running windows, source media or backend changed, so new code tests/benchmarks were not claimed. Next executable slice is CC-01 native rail organisation, followed by baseline typed editing/undo and composition/audio; licensed-library preparation can run independently. Native text/scenes/explainers stay early, ahead of optional recording/AI breadth. Local documentation milestone commit contains this entry.
+
 ## 2026-10-09 — approved B native implementation
 
 Replaced the ordinary nine-panel technical workspace with the approved B / Studio composition: compact header, two-column media grid, aspect-correct preview, contextual trim Inspector and full-width timeline. Technical history/activity/settings/diagnostics remain in an advanced dock. Compact widths use a reachable Inspector drawer. Ordinary clocks use proportional fonts with plain zeros; transport uses drawn icons and hover explanations. Preview volume/mute is a real monitor-only PCM gain and preserves the audio playback clock and exported audio.
