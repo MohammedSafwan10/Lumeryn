@@ -1,0 +1,23 @@
+[package]
+name = "lumeryn-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "lumeryn"
+path = "src/main.rs"
+
+[dependencies]
+lumeryn-core = { path = "../lumeryn-core", version = "=0.1.0" }
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

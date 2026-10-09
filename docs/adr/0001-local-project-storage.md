@@ -1,0 +1,26 @@
+# ADR 0001: Local SQLite project and application storage
+
+Date: 2026-10-09. Status: accepted foundation; transcript/vector/global application services staged.
+
+## Decision and evidence
+
+Use Rust, SQLx 0.9.0 and bundled SQLite 3.51.3 in a portable `project.lumeryn` per project. The build/runtime tests verify this SQLite version, including the documented WAL-reset fix. Original media, generated images/audio, models and render caches remain filesystem assets; the database stores references/provenance and editable state. No PostgreSQL, Firebase, Appwrite or mandatory cloud database. [SQLite WAL](https://www.sqlite.org/wal.html), [SQLx SQLite](https://docs.rs/sqlx/0.9.0/sqlx/sqlite/).
+
+The existing tested schema stores an authoritative versioned JSON graph plus revision/history/idempotency rows. This is a deliberate small-slice implementation: it retains exact rational time and stable IDs, prevents duplicate editing semantics, and avoids premature normalization. Track/effect/keyframe extensibility remains part of the full project contract; currently only one video track and basic clips are implemented. Normalize indexed objects later when actual large-timeline benchmarks demonstrate the need. JSON does not justify opaque unvalidated or JavaScript-owned editing logic.
+
+Project writes use WAL, FULL synchronization, finite lock waits, BEGIN IMMEDIATE, checked revisions and atomic snapshot/history/receipts. Read-only open validates schemas without persistently changing unrelated databases. Creation checkpoints a private temporary database and publishes to a new path. Versioned schema migrations run as explicit checked transactions; integrity checks report corruption rather than repairing or deleting owner data silently. Never copy only a live WAL database as a backup. Add a consistent new-file snapshot operation using SQLite `VACUUM INTO`/backup semantics. [Transactions](https://www.sqlite.org/lang_transaction.html), [integrity pragmas](https://www.sqlite.org/pragma.html#pragma_integrity_check), [backup](https://www.sqlite.org/backup.html), [VACUUM INTO](https://www.sqlite.org/lang_vacuum.html#vacuuminto).
+
+A separate global application SQLite database will own installed-model manifests, settings, measured hardware/backend profiles and shared metadata. It must never be necessary to reopen/edit a project, and global search indexes are rebuildable. Place app data using OS data-directory conventions; make location configurable. Do not introduce global storage until settings/models/benchmarks have actual write APIs. This avoids an empty mandatory service and preserves portable project ownership. Global schema migrations are independent of project schema migrations; cross-database operations need recoverable orchestration, not assumed cross-WAL atomicity.
+
+SQLite FTS5 is the preferred lexical index for transcripts and metadata. Begin with project/media metadata; transcript rows later include source IDs and rational timestamps and update FTS in the same command transaction. Bound queries/result limits; use parameters and explicit MATCH syntax validation. FTS is a derived index, not authoritative editing state. Bundled FTS5 availability must be verified in tests. [FTS5](https://www.sqlite.org/fts5.html).
+
+Do not choose a vector backend yet. Compare exact-search Rust baseline, optional per-project/local vector index and SQLite-compatible extensions against real CLIP dimensionality, corpus size, latency, recall, RAM, index update/rebuild cost, Windows packaging and licenses. Embeddings/checkpoints/runtime rights are separate. FTS5 does not provide semantic similarity. Any extension must be statically trusted or loaded only from validated install paths; projects cannot choose arbitrary SQLite extensions.
+
+## Service boundary and migration
+
+Both CLI and future Studio must write through the same authoritative Rust project service. The current headless `Store::execute` is the single shared command implementation and SQLite serializes CLI writers; it is not yet the authenticated background project service or event stream. Before Studio ships, move command authority to that service, prohibit direct client database mutations and durably publish revision events. IPC, auth, replay and reconnect tests in ADR 0003 remain open. No continuous full-file polling.
+
+## Alternatives, overhead and limits
+
+Client-server databases add deployment/network availability and privacy overhead and are unnecessary for a local desktop project. rusqlite is credible but would duplicate the selected persistence stack. Binary blobs enlarge backups and complicate relocation/cache cleanup. A single global-only project store would undermine project portability. SQLite WAL is unsuitable for network filesystems; portable means a consistent closed/checkpointed snapshot plus relocatable assets, not arbitrary live copies. CPU/disk costs of FULL synchronization, whole-graph serialization and FTS rebuilding need measured scaling; no throughput claim is made. Schema compatibility, crash recovery, long-reader checkpointing and safe backups remain explicit test gates.
+

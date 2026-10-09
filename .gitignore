@@ -1,0 +1,13 @@
+/target/
+/.lumeryn-scratch/
+*.lumeryn
+*.lumeryn-wal
+*.lumeryn-shm
+*.mp4
+*.mkv
+*.wav
+*.png
+.env
+*.pem
+*.key
+

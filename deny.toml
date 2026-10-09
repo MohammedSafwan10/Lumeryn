@@ -1,0 +1,26 @@
+# Third-party allowlist does not license the proprietary Lumeryn workspace.
+[graph]
+all-features = false
+
+[advisories]
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+include-dev = true
+include-build = true
+confidence-threshold = 0.8
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0"]
+unused-allowed-license = "allow"
+private = { ignore = true }
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+

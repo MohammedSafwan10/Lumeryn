@@ -1,0 +1,117 @@
+{
+  "$defs": {
+    "Edit": {
+      "description": "Commands contain no executable text. IDs may be supplied for batch references.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "import",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "id",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "duration_frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "media_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "add_clip",
+              "type": "string"
+            },
+            "source_in_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "operation",
+            "id",
+            "media_id",
+            "at_frame",
+            "source_in_frame",
+            "duration_frames"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "duration_frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "trim_clip",
+              "type": "string"
+            },
+            "source_in_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "source_in_frame",
+            "duration_frames"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "operations": {
+      "items": {
+        "$ref": "#/$defs/Edit"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "operations"
+  ],
+  "title": "Batch",
+  "type": "object"
+}

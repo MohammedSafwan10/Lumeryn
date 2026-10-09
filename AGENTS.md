@@ -1,0 +1,15 @@
+# Lumeryn engineering instructions
+
+- Read `docs/PRODUCT_SPEC.md` (authoritative), `PROGRESS.md`, `TASKS.md`, and `ARCHITECTURE.md` before changes. Original code is proprietary; no publishing, remote creation, public license, or uploads without owner approval.
+- Primary users are beginners briefing external agents. Plan narrative/storyboard/assets, choose sensible creative defaults, inspect actual visuals/audio and refine with bounded iterations. Preserve professional manual editing on the same project. Prioritize editable animated explainers after foundation/live Studio sync; do not require expert knowledge or add an agent runtime.
+- Rust owns all editing semantics. CLI and future Tauri Studio use the same typed core commands. No MCP or embedded agent runtime. Optional AI and Blender remain optional.
+- Never modify source media. Use stable IDs, integer/rational time, transactions, revision checks and explicit errors. Never advertise unimplemented features.
+- Research major decisions using official current docs and record ADRs, licensing obligations, alternatives and measured limits. Do not bundle GPL tools/models without review.
+- Coordinate subagents with explicit file ownership; review their work. Keep the workspace small; extract crates when functionality needs them.
+- Install locally: `cargo install --path crates/lumeryn-cli --locked`. Discover: `lumeryn capabilities`, `lumeryn schema`, `lumeryn --help`. Workflow and errors: `docs/cli/WORKFLOWS.md`.
+- Select every project explicitly with `--project`. Inspect media before placing it. Inspect the project revision before writing; pass `--expected-revision` and an optional `--idempotency-key`. Use `project batch --dry-run` before atomic batches.
+- Use per-project SQLite+SQLx; keep media/models/caches on disk. Global settings/model/benchmark storage and vector indexes remain staged. Use `project check --assets`, `project backup`, and explicit `project migrate`; never copy a live WAL database alone. See ADR 0001 for portable references and sole-writer service migration.
+- Preview, resource planning and final rendering capabilities must be discovered first. Unsupported operations fail explicitly. Export only to a new path and verify decoded output; never infer success from process launch.
+- Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --locked`. Media acceptance: `cargo test --locked --test workflow -- --include-ignored` requires configured FFmpeg/ffprobe. Update TASKS/PROGRESS after each milestone; commit only verified work locally.
+- Full gate: `./scripts/check.ps1 -Media -Deny`. Dependencies must pass cargo-deny with individually reviewed exceptions; no public license is applied to Lumeryn. Optional models/renderers stay out of the minimal install. Creative-demo targets and next executable work are in the roadmap.
+- Ask approval before destructive operations, publishing, charges or changing important requirements. Do not commit credentials, customer media or generated test binaries.
