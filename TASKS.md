@@ -42,3 +42,11 @@ DONE above describes the scoped verified baseline. The full professional-editor 
 Next executable creative slice: roadmap C1-C8 starts with a versioned semantic scene schema, then native shapes/text/animation evaluated in the headless core through the same revision service, Studio preview and decoded export parity. Research Parley/cosmic-text/Vello/resvg before actual integration. UI fonts do not implement professional export typography. Then reusable explainer components, narration cues and scene-local QA, followed by editable60second neural-network Demo A. Optional approved media/Blender support Demos B/C later.
 
 Global SQLite model/settings/benchmarks storage, transcript FTS5, vector indexes, professional mixing/waveforms, effects, undo/redo, complete hardware scheduling, AI models, disk proxies/cache, installer/code signing and signed updates remain staged. No task implies shipped support without recorded tests.
+
+## Owner-requested Studio visual redesign
+
+| ID | Phase / priority | Work; dependencies | Owner / scope | Acceptance / evidence | Status |
+|---|---|---|---|---|---|
+|UX-001|Design/P0|Inspect owner screenshot and create four distinct directions|Lead/docs/design|A Focus,B Studio,C Storyboard,D Review saved/visually reviewed; exact prompts and asset manifest; no engine changes|DONE|
+|UX-002|Design/P0|Owner selects direction;UX-001|Owner/reference choice|Choose A/B/C/D or explicit combination; extend key states and define compact/DPI layout contract|AWAITING SELECTION|
+|UX-003|Implementation/P0|Approved native visual slice;UX-002|Next/apps/lumeryn-studio|Match chosen reference, user-friendly history/file dialogs, complete open-preview-trim-live-edit-export flow, native visual/function gates; preserve core/service|TODO|

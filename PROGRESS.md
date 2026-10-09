@@ -1,5 +1,8 @@
 # Progress
 
+## 2026-10-09 — Studio visual redesign concepts
+
+Owner rejected the dense technical Studio UI and requested four alternatives using mockup-to-product, followed by owner selection. Four independent full-screen concepts are saved under docs/design/studio-redesign-v1: A Focus, B Studio, C Storyboard and D Review. Built-in image generation was used; exact prompts/provenance/hashes and visual review are recorded in docs/design/STUDIO_REDESIGN.md. Concepts contain illustrative scenes, thumbnails and values, not newly working features. Selection is pending; no Rust/UI/service/schema implementation changed. Next extend the selected family into key states, then implement the native flow and verify against the approved reference.
 ## 2026-10-09 — verified native Rust baseline
 
 Implemented five workspace packages: independent headless core, standalone CLI, authoritative Windows project service, bounded preview/audio worker and native egui/eframe/egui_dock/egui-wgpu/wgpu Studio. Nine functional docking panels provide import/place, real preview/play/pause/seek/step/quality, custom visible timeline selection/trim/zoom/scroll, Inspector, actual settings/history, render/cancel events and diagnostics. CLI and Studio share current-user protected named-pipe service. No Tauri/Svelte/WebView/Node frontend existed or is required.

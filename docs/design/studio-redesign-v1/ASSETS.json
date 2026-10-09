@@ -1,0 +1,54 @@
+{
+  "date": "2026-10-09",
+  "target_logical_viewport": [
+    1600,
+    1000
+  ],
+  "generation_mode": "built-in tool",
+  "directions": [
+    {
+      "file": "A-focus.png",
+      "width": 1586,
+      "height": 992,
+      "bytes": 1491081,
+      "sha256": "45832e76960eb3ba919b2d78f366c40e596301f4bb4152f4ca8d7c6e02ba839b",
+      "role": "unapproved design direction",
+      "source": "built-in image_gen; new generation; exact prompt in PROMPTS.md",
+      "transforms": "none; copied unchanged",
+      "production_asset": false
+    },
+    {
+      "file": "B-studio.png",
+      "width": 1586,
+      "height": 992,
+      "bytes": 1713423,
+      "sha256": "5c02ec7a2d23bdf00dfbeb3b9d816561951a9d66dd20e82438a715903e6bb5af",
+      "role": "unapproved design direction",
+      "source": "built-in image_gen; new generation; exact prompt in PROMPTS.md",
+      "transforms": "none; copied unchanged",
+      "production_asset": false
+    },
+    {
+      "file": "C-storyboard.png",
+      "width": 1586,
+      "height": 992,
+      "bytes": 1556435,
+      "sha256": "b4a53fc049a0c2398dd7f09ec334647d4699dc983ff3b01311c17242e70d0df7",
+      "role": "unapproved design direction",
+      "source": "built-in image_gen; new generation; exact prompt in PROMPTS.md",
+      "transforms": "none; copied unchanged",
+      "production_asset": false
+    },
+    {
+      "file": "D-review.png",
+      "width": 1586,
+      "height": 992,
+      "bytes": 1577691,
+      "sha256": "12f57fd2eeab9926b0d6403a603255280478ba233a1f03f38719cb90e503e74b",
+      "role": "unapproved design direction",
+      "source": "built-in image_gen; new generation; exact prompt in PROMPTS.md",
+      "transforms": "none; copied unchanged",
+      "production_asset": false
+    }
+  ]
+}
