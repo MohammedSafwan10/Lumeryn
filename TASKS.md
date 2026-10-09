@@ -1,5 +1,17 @@
 # Task board
 
+## Approved B Studio redesign
+
+The owner selected B / Studio. Implementation preserves the authoritative Rust service and project graph. Design contract: `docs/design/STUDIO_REDESIGN.md`; executed evidence: `docs/testing/STUDIO_REDESIGN.md`.
+
+| ID | Priority / dependencies | Owner and scope | Acceptance | Status / evidence |
+|---|---|---|---|---|
+| UX-001 | P0 / none | Lead / four visual concepts | Distinct references and provenance | DONE; A Focus, B Studio, C Storyboard, D Review |
+| UX-002 | P0 /001 | Owner / direction selection | Approved reference and responsive contract | DONE; B / Studio selected |
+| UX-003 | P0 /002 | Lead + asset specialist / native B slice | Responsive shell, readable clocks, native icons/dialogs, real thumbnails/waveforms, monitor volume, contextual trim; preserve service semantics | DONE; final fmt, strict all-target Clippy,62distinct tests/cargo-deny and actual native workflows/captures passed |
+| UX-004 | P0 /003 | Verification + Lead / native acceptance | Actual three viewport workflow and five related-state captures; source integrity and unchanged readonly revisions; compare B | DONE; final3size/default workflows,5readonly states/revision2/source8unchanged, all8PNG visual review; retained evidence in STUDIO_REDESIGN |
+| UX-005 | P1 /004 | Future desktop QA / physical usability | Dialog select/cancel/focus, pointer, 150%/200% DPI, keyboard resize and physical A/V checks | TODO; scripted actions and 100% captures do not establish these checks |
+
 ## Native desktop migration — active owner decision
 
 Checkpoint: local commit `0c0efed` preserves verified CLI/core/media/database and all specs. No Tauri/Svelte/frontend/installer/Node project exists, so no frontend deletion is necessary. Preserve independent source/test work. Native selection supersedes old future-Tauri tasks; do not recreate them.
@@ -41,12 +53,4 @@ DONE above describes the scoped verified baseline. The full professional-editor 
 
 Next executable creative slice: roadmap C1-C8 starts with a versioned semantic scene schema, then native shapes/text/animation evaluated in the headless core through the same revision service, Studio preview and decoded export parity. Research Parley/cosmic-text/Vello/resvg before actual integration. UI fonts do not implement professional export typography. Then reusable explainer components, narration cues and scene-local QA, followed by editable60second neural-network Demo A. Optional approved media/Blender support Demos B/C later.
 
-Global SQLite model/settings/benchmarks storage, transcript FTS5, vector indexes, professional mixing/waveforms, effects, undo/redo, complete hardware scheduling, AI models, disk proxies/cache, installer/code signing and signed updates remain staged. No task implies shipped support without recorded tests.
-
-## Owner-requested Studio visual redesign
-
-| ID | Phase / priority | Work; dependencies | Owner / scope | Acceptance / evidence | Status |
-|---|---|---|---|---|---|
-|UX-001|Design/P0|Inspect owner screenshot and create four distinct directions|Lead/docs/design|A Focus,B Studio,C Storyboard,D Review saved/visually reviewed; exact prompts and asset manifest; no engine changes|DONE|
-|UX-002|Design/P0|Owner selects direction;UX-001|Owner/reference choice|Choose A/B/C/D or explicit combination; extend key states and define compact/DPI layout contract|AWAITING SELECTION|
-|UX-003|Implementation/P0|Approved native visual slice;UX-002|Next/apps/lumeryn-studio|Match chosen reference, user-friendly history/file dialogs, complete open-preview-trim-live-edit-export flow, native visual/function gates; preserve core/service|TODO|
+Global SQLite model/settings/benchmarks storage, transcript FTS5, vector indexes, professional mixing and persistent waveform caching, effects, undo/redo, complete hardware scheduling, AI models, disk proxies/cache, installer/code signing and signed updates remain staged. No task implies shipped support without recorded tests.

@@ -45,6 +45,9 @@ pub struct Smoke {
     checks: Vec<Value>,
     screenshot_requested: bool,
     screenshot_saved: bool,
+    asset_wait_started: Option<Instant>,
+    asset_wait_expired: bool,
+    screenshot_assets: Option<Value>,
 }
 
 impl Smoke {
@@ -56,6 +59,9 @@ impl Smoke {
             checks: Vec::new(),
             screenshot_requested: false,
             screenshot_saved: false,
+            asset_wait_started: None,
+            asset_wait_expired: false,
+            screenshot_assets: None,
         }
     }
 
@@ -78,6 +84,7 @@ impl Smoke {
         });
         let report = json!({
             "schema_version":1,"passed":passed,"error":error,"checks":self.checks,
+            "viewport":{"logical_width":session.viewport_size.x,"logical_height":session.viewport_size.y,"pixels_per_point":session.pixels_per_point},
             "elapsed_ms":self.started.elapsed().as_secs_f64()*1000.0,"first_frame_ms":session.first_frame_ms,
             "ui_updates":session.ui_frames,"max_ui_update_ms":session.max_ui_ms,"presented_frames":session.presented_frames,
             "ui_update_p50_ms":percentile(50),"ui_update_p95_ms":percentile(95),"ui_update_samples":ui_samples.len(),
@@ -86,7 +93,9 @@ impl Smoke {
             "last_cpu_upload_submission_ms":session.texture.as_ref().map(|texture|texture.upload_cpu_ms),
             "project_revision":session.project.as_ref().map(|project|project.revision),"preview":preview,
             "native_screenshot":self.directory.join("studio-native.png"),"screenshot_saved":self.screenshot_saved,
-            "limitations":["Scripted actions call the same UI command paths; pointer usability is a separate manual acceptance.","CPU upload timing does not measure GPU completion or photon latency.","VRAM consumption is unknown without telemetry.","Audio device status alone does not prove end-to-end A/V tolerance.","Effects, multi-track composition, thumbnails, waveforms, undo/redo and proxies are not implemented in this milestone."]
+            "screenshot_assets":self.screenshot_assets,"asset_capture_wait_expired":self.asset_wait_expired,
+            "asset_evidence":session.asset_evidence(),
+            "limitations":["Scripted actions call the same UI command paths; pointer usability and native file-dialog cancellation are separate manual acceptance.","CPU upload timing does not measure GPU completion or photon latency.","VRAM consumption is unknown without telemetry.","Audio device status alone does not prove end-to-end A/V tolerance.","Effects, multi-track composition, undo/redo and proxies remain staged. Thumbnail/waveform caches are bounded; readiness/counts are reported independently of workflow success."]
         });
         if session.send(Command::Report {
             path: self.directory.join("studio-smoke.json"),
@@ -319,6 +328,12 @@ impl Smoke {
             }
             Stage::Screenshot => {
                 if !self.screenshot_requested {
+                    let waiting = self.asset_wait_started.get_or_insert_with(Instant::now);
+                    if !session.assets_ready() && waiting.elapsed() < Duration::from_secs(8) {
+                        return;
+                    }
+                    self.asset_wait_expired = !session.assets_ready();
+                    self.screenshot_assets = Some(session.asset_evidence());
                     ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
                     self.screenshot_requested = true;
                 }

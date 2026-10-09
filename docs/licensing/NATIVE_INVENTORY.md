@@ -1,9 +1,9 @@
 # Resolved native workspace dependency inventory
 
 Generated from cargo metadata --locked on 2026-10-09. Runtime, build, macro, target-specific and test dependencies are included. Registry metadata is a review input, not a complete redistribution notice bundle or legal certificate. Proprietary workspace packages are excluded from the third-party table and remain unpublished.
-Lockfile SHA256: `CF5FD85B60DCBC169E65BCDB8F3EBD9BDBD00503F7CADCDD51A9166FDABC4079`; third-party packages: 496.
+Lockfile SHA256: `78CC732647426804E08535C981F10E8BC06C5DC4C45D8B10CE97050FAF1F5312`; third-party packages: 497.
 
-The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPENDENCIES.md and deny.toml, retaining platform duplicate warnings. The original CLI inventory in DEPENDENCIES.md remains a historical foundation checkpoint. Full native package inventory follows.
+The2026-10-09 final cargo-deny gate passed for this exact lockfile (advisories,bans,licenses,sources); rerun after every dependency change. Reviewed exceptions remain in NATIVE_DEPENDENCIES.md and deny.toml; platform duplicates are warning-level. The original CLI inventory in DEPENDENCIES.md is a historical checkpoint.
 
 | Package | Version | Declared license |
 |---|---|---|
@@ -22,9 +22,9 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | allocator-api2 | 0.2.21 | MIT OR Apache-2.0 |
 | alsa | 0.11.0 | Apache-2.0/MIT |
 | alsa-sys | 0.4.0 | MIT |
-| android_system_properties | 0.1.6 | MIT OR Apache-2.0 |
 | android-activity | 0.6.1 | MIT OR Apache-2.0 |
 | android-properties | 0.2.2 | MIT |
+| android_system_properties | 0.1.6 | MIT OR Apache-2.0 |
 | anstream | 1.0.0 | MIT OR Apache-2.0 |
 | anstyle | 1.0.14 | MIT OR Apache-2.0 |
 | anstyle-parse | 1.0.0 | MIT OR Apache-2.0 |
@@ -70,8 +70,8 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | calloop-wayland-source | 0.3.0 | MIT |
 | calloop-wayland-source | 0.4.1 | MIT |
 | cc | 1.6.0 | MIT OR Apache-2.0 |
-| cfg_aliases | 0.2.2 | MIT |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 |
+| cfg_aliases | 0.2.2 | MIT |
 | cgl | 0.3.2 | MIT / Apache-2.0 |
 | clap | 4.6.7 | MIT OR Apache-2.0 |
 | clap_builder | 4.6.7 | MIT OR Apache-2.0 |
@@ -115,10 +115,10 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | ecolor | 0.36.2 | MIT OR Apache-2.0 |
 | eframe | 0.36.2 | MIT OR Apache-2.0 |
 | egui | 0.36.2 | MIT OR Apache-2.0 |
-| egui_dock | 0.21.1 | MIT |
-| egui_glow | 0.36.2 | MIT OR Apache-2.0 |
 | egui-wgpu | 0.36.2 | MIT OR Apache-2.0 |
 | egui-winit | 0.36.2 | MIT OR Apache-2.0 |
+| egui_dock | 0.21.1 | MIT |
+| egui_glow | 0.36.2 | MIT OR Apache-2.0 |
 | either | 1.19.0 | MIT OR Apache-2.0 |
 | emath | 0.36.2 | MIT OR Apache-2.0 |
 | endi | 1.1.1 | MIT |
@@ -164,10 +164,10 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | glifo | 0.2.0 | Apache-2.0 OR MIT |
 | glow | 0.17.0 | MIT OR Apache-2.0 OR Zlib |
 | glutin | 0.32.3 | Apache-2.0 |
+| glutin-winit | 0.5.0 | MIT |
 | glutin_egl_sys | 0.7.1 | Apache-2.0 |
 | glutin_glx_sys | 0.6.1 | Apache-2.0 |
 | glutin_wgl_sys | 0.6.1 | Apache-2.0 |
-| glutin-winit | 0.5.0 | MIT |
 | gpu-allocator | 0.28.0 | MIT OR Apache-2.0 |
 | guillotiere | 0.7.0 | MIT/Apache-2.0 |
 | half | 2.7.1 | MIT OR Apache-2.0 |
@@ -199,8 +199,8 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | jni-sys-macros | 0.4.1 | MIT OR Apache-2.0 |
 | jobserver | 0.1.35 | MIT OR Apache-2.0 |
 | js-sys | 0.3.106 | MIT OR Apache-2.0 |
-| khronos_api | 3.1.0 | Apache-2.0 |
 | khronos-egl | 6.0.0 | MIT/Apache-2.0 |
+| khronos_api | 3.1.0 | Apache-2.0 |
 | kurbo | 0.13.1 | Apache-2.0 OR MIT |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 |
 | libc | 0.2.190 | MIT OR Apache-2.0 |
@@ -231,10 +231,10 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 |
 | nohash-hasher | 0.2.0 | Apache-2.0 OR MIT |
 | nu-ansi-term | 0.50.3 | MIT |
-| num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
-| num_enum_derive | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
 | num-derive | 0.4.2 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
+| num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
+| num_enum_derive | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 |
 | objc-sys | 0.3.5 | MIT |
 | objc2 | 0.5.3 | MIT |
 | objc2 | 0.6.5 | MIT |
@@ -316,10 +316,11 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 |
+| rfd | 0.17.2 | MIT |
 | ron | 0.12.2 | MIT OR Apache-2.0 |
-| rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustc-hash | 1.1.0 | Apache-2.0/MIT |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
+| rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustix | 0.38.44 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustversion | 1.0.23 | MIT OR Apache-2.0 |
@@ -340,8 +341,8 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | sharded-slab | 0.1.7 | MIT |
 | shlex | 2.0.1 | MIT OR Apache-2.0 |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |
-| simd_cesu8 | 1.2.0 | Apache-2.0 OR MIT |
 | simd-adler32 | 0.3.10 | MIT |
+| simd_cesu8 | 1.2.0 | Apache-2.0 OR MIT |
 | simdutf8 | 0.1.5 | MIT OR Apache-2.0 |
 | siphasher | 1.0.4 | MIT OR Apache-2.0 |
 | skrifa | 0.44.0 | MIT OR Apache-2.0 |
@@ -437,22 +438,6 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | wgpu-types | 30.0.1 | MIT OR Apache-2.0 |
 | winapi-util | 0.1.11 | Unlicense OR MIT |
 | windows | 0.62.2 | MIT OR Apache-2.0 |
-| windows_aarch64_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
-| windows_aarch64_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
-| windows_aarch64_msvc | 0.52.6 | MIT OR Apache-2.0 |
-| windows_aarch64_msvc | 0.53.1 | MIT OR Apache-2.0 |
-| windows_i686_gnu | 0.52.6 | MIT OR Apache-2.0 |
-| windows_i686_gnu | 0.53.1 | MIT OR Apache-2.0 |
-| windows_i686_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
-| windows_i686_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
-| windows_i686_msvc | 0.52.6 | MIT OR Apache-2.0 |
-| windows_i686_msvc | 0.53.1 | MIT OR Apache-2.0 |
-| windows_x86_64_gnu | 0.52.6 | MIT OR Apache-2.0 |
-| windows_x86_64_gnu | 0.53.1 | MIT OR Apache-2.0 |
-| windows_x86_64_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
-| windows_x86_64_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
-| windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 |
-| windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 |
 | windows-collections | 0.3.2 | MIT OR Apache-2.0 |
 | windows-core | 0.62.2 | MIT OR Apache-2.0 |
 | windows-future | 0.3.2 | MIT OR Apache-2.0 |
@@ -469,6 +454,22 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | windows-targets | 0.52.6 | MIT OR Apache-2.0 |
 | windows-targets | 0.53.5 | MIT OR Apache-2.0 |
 | windows-threading | 0.2.1 | MIT OR Apache-2.0 |
+| windows_aarch64_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
+| windows_aarch64_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
+| windows_aarch64_msvc | 0.52.6 | MIT OR Apache-2.0 |
+| windows_aarch64_msvc | 0.53.1 | MIT OR Apache-2.0 |
+| windows_i686_gnu | 0.52.6 | MIT OR Apache-2.0 |
+| windows_i686_gnu | 0.53.1 | MIT OR Apache-2.0 |
+| windows_i686_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
+| windows_i686_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
+| windows_i686_msvc | 0.52.6 | MIT OR Apache-2.0 |
+| windows_i686_msvc | 0.53.1 | MIT OR Apache-2.0 |
+| windows_x86_64_gnu | 0.52.6 | MIT OR Apache-2.0 |
+| windows_x86_64_gnu | 0.53.1 | MIT OR Apache-2.0 |
+| windows_x86_64_gnullvm | 0.52.6 | MIT OR Apache-2.0 |
+| windows_x86_64_gnullvm | 0.53.1 | MIT OR Apache-2.0 |
+| windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 |
+| windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 |
 | winit | 0.30.13 | Apache-2.0 |
 | winnow | 1.0.4 | MIT |
 | wit-bindgen | 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
@@ -483,11 +484,11 @@ The native Cargo-deny gate passes with narrow reviewed exceptions in NATIVE_DEPE
 | yoke | 0.8.3 | Unicode-3.0 |
 | yoke-derive | 0.8.4 | Unicode-3.0 |
 | zbus | 5.19.0 | MIT |
+| zbus-lockstep | 0.5.2 | MIT |
+| zbus-lockstep-macros | 0.5.2 | MIT |
 | zbus_macros | 5.19.0 | MIT |
 | zbus_names | 4.3.4 | MIT |
 | zbus_xml | 5.2.1 | MIT |
-| zbus-lockstep | 0.5.2 | MIT |
-| zbus-lockstep-macros | 0.5.2 | MIT |
 | zcheapstr | 1.1.0 | MIT |
 | zerocopy | 0.8.62 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zerocopy-derive | 0.8.62 | BSD-2-Clause OR Apache-2.0 OR MIT |

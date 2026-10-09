@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -110,6 +110,7 @@ pub struct PreviewPlayer {
     frames: mpsc::Receiver<PreviewFrame>,
     status: Arc<Mutex<PreviewStatus>>,
     generation: Arc<AtomicU64>,
+    volume: Arc<AtomicU32>,
     stop: watch::Sender<bool>,
 }
 impl PreviewPlayer {
@@ -130,13 +131,21 @@ impl PreviewPlayer {
         let (stop, stopped) = watch::channel(false);
         let status = Arc::new(Mutex::new(PreviewStatus::default()));
         let generation = Arc::new(AtomicU64::new(0));
+        let volume = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
         let shared = Arc::clone(&status);
         let current = Arc::clone(&generation);
+        let gain = Arc::clone(&volume);
         std::thread::Builder::new()
             .name("lumeryn-preview".into())
             .spawn(move || {
                 runtime.block_on(run(
-                    tools, config, receiver, output, shared, current, stopped,
+                    tools,
+                    config,
+                    receiver,
+                    output,
+                    shared,
+                    (current, gain),
+                    stopped,
                 ));
             })?;
         Ok(Self {
@@ -144,6 +153,7 @@ impl PreviewPlayer {
             frames,
             status,
             generation,
+            volume,
             stop,
         })
     }
@@ -180,6 +190,19 @@ impl PreviewPlayer {
     }
     pub fn set_audio_enabled(&self, enabled: bool) -> Result<()> {
         self.changing(|g| Command::Audio(enabled, g))
+    }
+    /// Monitor gain only; does not modify source PCM, project mixing, export, or the playback clock.
+    pub fn set_volume(&self, gain: f32) -> Result<()> {
+        if !gain.is_finite() || !(0.0..=1.0).contains(&gain) {
+            return Err(Error::Invalid(
+                "preview volume must be finite and within 0..1".into(),
+            ));
+        }
+        self.volume.store(gain.to_bits(), Ordering::Relaxed);
+        Ok(())
+    }
+    pub fn volume(&self) -> f32 {
+        f32::from_bits(self.volume.load(Ordering::Relaxed))
     }
     pub fn status(&self) -> PreviewStatus {
         snapshot(&self.status)
@@ -270,6 +293,7 @@ fn start_session(
     tools: &MediaTools,
     audio_enabled: bool,
     status: &Mutex<PreviewStatus>,
+    volume: &Arc<AtomicU32>,
 ) -> Session {
     let (sender, packets) = mpsc::channel(1);
     let (cancel, cancelled) = watch::channel(0);
@@ -282,7 +306,13 @@ fn start_session(
         cancelled.clone(),
     ));
     let audio = if audio_enabled {
-        match audio::Output::start(plan.clone(), start, tools.clone(), cancelled) {
+        match audio::Output::start(
+            plan.clone(),
+            start,
+            tools.clone(),
+            cancelled,
+            Arc::clone(volume),
+        ) {
             Ok(output) => {
                 update(status, |s| s.audio = output.status(false));
                 Some(output)
@@ -328,9 +358,10 @@ async fn run(
     mut commands: mpsc::Receiver<Command>,
     output: mpsc::Sender<PreviewFrame>,
     status: Arc<Mutex<PreviewStatus>>,
-    generation: Arc<AtomicU64>,
+    controls: (Arc<AtomicU64>, Arc<AtomicU32>),
     mut stopped: watch::Receiver<bool>,
 ) {
+    let (generation, volume) = controls;
     let mut session: Option<Session> = None;
     let mut building: Option<tokio::task::JoinHandle<(u64, Result<Plan>)>> = None;
     let mut playing = false;
@@ -355,9 +386,9 @@ async fn run(
                     }
                     Command::Play => { playing = session.is_some() || building.is_some(); if let Some(s) = &mut session && !s.first { s.clock.play(); if let Some(a) = &s.audio { a.set_playing(true); } } }
                     Command::Pause => { playing = false; if let Some(s) = &mut session { s.clock.pause(s.plan.rate); if let Some(a) = &s.audio { a.set_playing(false); } } }
-                    Command::Seek(frame, g) => { pending_start = frame; if let Some(s) = session.take() { let frame = frame.min(s.plan.total - 1); let plan = s.plan.clone(); drop(s); session = Some(start_session(plan, frame, g, &tools, audio_enabled, &status)); } }
-                    Command::Step(delta, g) => { playing = false; pending_start = pending_start.saturating_add_signed(delta); if let Some(s) = session.take() { let at = snapshot(&status).position_frame.saturating_add_signed(delta).min(s.plan.total - 1); let plan = s.plan.clone(); drop(s); session = Some(start_session(plan, at, g, &tools, audio_enabled, &status)); } }
-                    Command::Audio(enabled, g) => { audio_enabled = enabled; if let Some(s) = session.take() { let at = snapshot(&status).position_frame; let plan = s.plan.clone(); drop(s); session = Some(start_session(plan, at, g, &tools, audio_enabled, &status)); } }
+                    Command::Seek(frame, g) => { pending_start = frame; if let Some(s) = session.take() { let frame = frame.min(s.plan.total - 1); let plan = s.plan.clone(); drop(s); session = Some(start_session(plan, frame, g, &tools, audio_enabled, &status, &volume)); } }
+                    Command::Step(delta, g) => { playing = false; pending_start = pending_start.saturating_add_signed(delta); if let Some(s) = session.take() { let at = snapshot(&status).position_frame.saturating_add_signed(delta).min(s.plan.total - 1); let plan = s.plan.clone(); drop(s); session = Some(start_session(plan, at, g, &tools, audio_enabled, &status, &volume)); } }
+                    Command::Audio(enabled, g) => { audio_enabled = enabled; if let Some(s) = session.take() { let at = snapshot(&status).position_frame; let plan = s.plan.clone(); drop(s); session = Some(start_session(plan, at, g, &tools, audio_enabled, &status, &volume)); } }
                 }
                 update(&status, |s| s.playing = playing);
             }
@@ -365,7 +396,7 @@ async fn run(
                 if building.as_ref().is_some_and(|task| task.is_finished())
                     && let Some(task) = building.take() {
                         match task.await {
-                            Ok((g, Ok(plan))) if g == loading_generation => { let at = pending_start.min(plan.total - 1); session = Some(start_session(plan, at, generation.load(Ordering::Acquire), &tools, audio_enabled, &status)); },
+                            Ok((g, Ok(plan))) if g == loading_generation => { let at = pending_start.min(plan.total - 1); session = Some(start_session(plan, at, generation.load(Ordering::Acquire), &tools, audio_enabled, &status, &volume)); },
                             Ok((g, Err(error))) if g == loading_generation => update(&status, |s| s.error = Some(error.to_string())),
                             Err(error) => update(&status, |s| s.error = Some(error.to_string())),
                             _ => {}
@@ -413,6 +444,29 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn monitor_volume_validation_does_not_change_generation_or_position() -> Result<()> {
+        let player = PreviewPlayer::new(
+            MediaTools::default(),
+            PreviewConfig {
+                audio: false,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(player.volume(), 1.0);
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1, 1.1] {
+            assert!(player.set_volume(invalid).is_err());
+            assert_eq!(player.volume(), 1.0);
+        }
+        for valid in [0.0, 0.8, 1.0] {
+            player.set_volume(valid)?;
+            assert_eq!(player.volume(), valid);
+        }
+        assert_eq!(player.generation.load(Ordering::Relaxed), 0);
+        assert_eq!(player.status().position_frame, 0);
+        assert!(!player.status().playing);
+        Ok(())
+    }
     #[test]
     fn rational_clock_has_exact_boundaries_and_pause_freezes() -> Result<()> {
         let rate = FrameRate::new(30_000, 1001)?;

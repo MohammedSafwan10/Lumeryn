@@ -9,7 +9,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -33,6 +33,7 @@ struct Shared {
     capacity: usize,
     finished: AtomicBool,
     consumed: Notify,
+    volume: Arc<AtomicU32>,
 }
 
 pub(crate) struct Output {
@@ -47,6 +48,7 @@ impl Output {
         start: u64,
         tools: MediaTools,
         cancelled: watch::Receiver<u64>,
+        volume: Arc<AtomicU32>,
     ) -> Result<Self> {
         let host = cpal::default_host();
         let device = host
@@ -78,6 +80,7 @@ impl Output {
             capacity,
             finished: AtomicBool::new(false),
             consumed: Notify::new(),
+            volume,
         });
         let stream = match supported.sample_format() {
             cpal::SampleFormat::F32 => build::<f32>(&device, config, Arc::clone(&shared)),
@@ -194,13 +197,8 @@ where
                 };
                 let channels = usize::from(shared.channels);
                 let wanted = output.len() / channels;
-                let available = buffer.samples.len() / channels;
-                let frames = available.min(wanted);
-                for sample in output.iter_mut().take(frames * channels) {
-                    if let Some(value) = buffer.samples.pop_front() {
-                        *sample = T::from_sample(value);
-                    }
-                }
+                let gain = f32::from_bits(shared.volume.load(Ordering::Relaxed));
+                let frames = write_samples(&mut buffer, output, channels, gain);
                 let timestamps = info.timestamp();
                 let latency = timestamps.playback.duration_since(timestamps.callback);
                 if frames > 0 {
@@ -223,6 +221,26 @@ where
             None,
         )
         .map_err(|e| Error::Media(e.to_string()))
+}
+
+fn write_samples<T: cpal::Sample + cpal::FromSample<f32>>(
+    buffer: &mut Buffer,
+    output: &mut [T],
+    channels: usize,
+    gain: f32,
+) -> usize {
+    let frames = (buffer.samples.len() / channels).min(output.len() / channels);
+    for sample in output.iter_mut().take(frames * channels) {
+        if let Some(value) = buffer.samples.pop_front() {
+            let gained = if value.is_finite() {
+                (value * gain).clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            *sample = T::from_sample(gained);
+        }
+    }
+    frames
 }
 
 async fn decode(
@@ -329,6 +347,61 @@ async fn decode(
 mod tests {
     use super::*;
     use std::time::Duration;
+    fn pcm_buffer() -> Buffer {
+        Buffer {
+            samples: [0.75, -0.5, 0.25, -1.0].into(),
+            submitted: 480,
+            timing: None,
+            error: None,
+        }
+    }
+    #[test]
+    fn monitor_gain_changes_output_only_and_preserves_consumed_sample_count() {
+        let mut full = pcm_buffer();
+        let mut half = pcm_buffer();
+        let mut muted = pcm_buffer();
+        let mut full_pcm = [0_f32; 4];
+        let mut half_pcm = [0_f32; 4];
+        let mut muted_pcm = [1_f32; 4];
+        assert_eq!(write_samples(&mut full, &mut full_pcm, 2, 1.0), 2);
+        assert_eq!(write_samples(&mut half, &mut half_pcm, 2, 0.5), 2);
+        assert_eq!(write_samples(&mut muted, &mut muted_pcm, 2, 0.0), 2);
+        assert_eq!(full_pcm, [0.75, -0.5, 0.25, -1.0]);
+        assert_eq!(half_pcm, [0.375, -0.25, 0.125, -0.5]);
+        assert_eq!(muted_pcm, [0.0; 4]);
+        for buffer in [&full, &half, &muted] {
+            assert!(buffer.samples.is_empty());
+            assert_eq!(buffer.submitted, 480);
+            assert_eq!(heard_samples(buffer, 48_000, Instant::now()), 480);
+        }
+    }
+    #[test]
+    fn monitor_gain_converts_integer_pcm_and_contains_nonfinite_samples() {
+        use cpal::Sample;
+        let mut signed = pcm_buffer();
+        let mut unsigned = pcm_buffer();
+        let mut signed_pcm = [0_i16; 4];
+        let mut unsigned_pcm = [0_u16; 4];
+        write_samples(&mut signed, &mut signed_pcm, 2, 0.5);
+        write_samples(&mut unsigned, &mut unsigned_pcm, 2, 0.5);
+        assert_eq!(
+            signed_pcm,
+            [0.375, -0.25, 0.125, -0.5].map(i16::from_sample)
+        );
+        assert_eq!(
+            unsigned_pcm,
+            [0.375, -0.25, 0.125, -0.5].map(u16::from_sample)
+        );
+        let mut malformed = Buffer {
+            samples: [f32::NAN, f32::INFINITY, 5.0, -5.0].into(),
+            submitted: 0,
+            timing: None,
+            error: None,
+        };
+        let mut safe_pcm = [0_f32; 4];
+        write_samples(&mut malformed, &mut safe_pcm, 2, 1.0);
+        assert_eq!(safe_pcm, [0.0, 0.0, 1.0, -1.0]);
+    }
     #[test]
     fn audio_master_rational_mapping_and_dac_latency() -> Result<()> {
         let rate = FrameRate::new(30_000, 1001)?;

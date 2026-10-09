@@ -1,0 +1,366 @@
+{
+  "date": "2026-10-09",
+  "approved_reference": "B-studio.png",
+  "production_assets": {
+    "icons": "Rust vector painters in design.rs; no image atlas",
+    "fonts": "unmodified egui font package with retained upstream notices",
+    "media_thumbnails": "192x108 real representative decoded frame; 128-asset memory bound",
+    "waveforms": "up to1024 source PCM peaks; display normalization only"
+  },
+  "screenshots": [
+    {
+      "role": "active",
+      "path": "docs/design/studio-redesign-v1/implemented-active.png",
+      "source": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\active\\screenshot-capture.png",
+      "sha256": "980ed924b868e0371fa0b33ede2d927fc737b964b1b5c24ab17c854dbb19f52a",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "alpha": [
+        255,
+        255
+      ],
+      "fit": "native whole viewport; no crop",
+      "budget": "internal reference only, not shipped UI texture",
+      "provenance": "actual proprietary egui native capture; original local synthetic raster footage/PCM; no external media",
+      "visual_review": "root inspected; B hierarchy and reachable controls accepted at recorded 100% DPI",
+      "report": {
+        "asset_capture_wait_expired": false,
+        "asset_evidence": {
+          "complete": true,
+          "failed_assets": 0,
+          "thumbnails": 8,
+          "waveforms": 8
+        },
+        "capture": {
+          "assets": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "physical_height": 900,
+          "physical_width": 1440,
+          "playhead_frame": 720,
+          "presented_frame": [
+            2,
+            720
+          ],
+          "project_revision": 2,
+          "viewport": {
+            "logical_height": 900.0,
+            "logical_width": 1440.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "capture_only": true,
+        "elapsed_ms": 1711.4505,
+        "error": null,
+        "limitations": [
+          "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+          "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+          "Concurrent external edits may change the project; this capture path submits no editing commands."
+        ],
+        "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\active\\screenshot-capture.png",
+        "passed": true,
+        "playhead_frame": 720,
+        "presented_frame": [
+          2,
+          720
+        ],
+        "project_revision": 2,
+        "schema_version": 1,
+        "screenshot_saved": true,
+        "session_error": null,
+        "viewport": {
+          "logical_height": 900.0,
+          "logical_width": 1440.0,
+          "pixels_per_point": 1.0
+        }
+      }
+    },
+    {
+      "role": "compact",
+      "path": "docs/design/studio-redesign-v1/implemented-compact.png",
+      "source": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\compact\\screenshot-capture.png",
+      "sha256": "9677975dee1d9fdd8bf48157938f4b6c64dc4298f75c7031d2fc0e48e95d67bf",
+      "dimensions": [
+        980,
+        640
+      ],
+      "alpha": [
+        255,
+        255
+      ],
+      "fit": "native whole viewport; no crop",
+      "budget": "internal reference only, not shipped UI texture",
+      "provenance": "actual proprietary egui native capture; original local synthetic raster footage/PCM; no external media",
+      "visual_review": "root inspected; B hierarchy and reachable controls accepted at recorded 100% DPI",
+      "report": {
+        "asset_capture_wait_expired": false,
+        "asset_evidence": {
+          "complete": true,
+          "failed_assets": 0,
+          "thumbnails": 8,
+          "waveforms": 8
+        },
+        "capture": {
+          "assets": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "physical_height": 640,
+          "physical_width": 980,
+          "playhead_frame": 720,
+          "presented_frame": [
+            2,
+            720
+          ],
+          "project_revision": 2,
+          "viewport": {
+            "logical_height": 640.0,
+            "logical_width": 980.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "capture_only": true,
+        "elapsed_ms": 1396.4902000000002,
+        "error": null,
+        "limitations": [
+          "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+          "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+          "Concurrent external edits may change the project; this capture path submits no editing commands."
+        ],
+        "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\compact\\screenshot-capture.png",
+        "passed": true,
+        "playhead_frame": 720,
+        "presented_frame": [
+          2,
+          720
+        ],
+        "project_revision": 2,
+        "schema_version": 1,
+        "screenshot_saved": true,
+        "session_error": null,
+        "viewport": {
+          "logical_height": 640.0,
+          "logical_width": 980.0,
+          "pixels_per_point": 1.0
+        }
+      }
+    },
+    {
+      "role": "export",
+      "path": "docs/design/studio-redesign-v1/implemented-export.png",
+      "source": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\export\\screenshot-capture.png",
+      "sha256": "a6e16d5993fc5b7847a0a74e56a741a181251bf84f20411188064a94dca92ef2",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "alpha": [
+        255,
+        255
+      ],
+      "fit": "native whole viewport; no crop",
+      "budget": "internal reference only, not shipped UI texture",
+      "provenance": "actual proprietary egui native capture; original local synthetic raster footage/PCM; no external media",
+      "visual_review": "root inspected; B hierarchy and reachable controls accepted at recorded 100% DPI",
+      "report": {
+        "asset_capture_wait_expired": false,
+        "asset_evidence": {
+          "complete": true,
+          "failed_assets": 0,
+          "thumbnails": 8,
+          "waveforms": 8
+        },
+        "capture": {
+          "assets": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "physical_height": 900,
+          "physical_width": 1440,
+          "playhead_frame": 720,
+          "presented_frame": [
+            2,
+            720
+          ],
+          "project_revision": 2,
+          "viewport": {
+            "logical_height": 900.0,
+            "logical_width": 1440.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "capture_only": true,
+        "elapsed_ms": 1757.5837000000001,
+        "error": null,
+        "limitations": [
+          "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+          "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+          "Concurrent external edits may change the project; this capture path submits no editing commands."
+        ],
+        "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\export\\screenshot-capture.png",
+        "passed": true,
+        "playhead_frame": 720,
+        "presented_frame": [
+          2,
+          720
+        ],
+        "project_revision": 2,
+        "schema_version": 1,
+        "screenshot_saved": true,
+        "session_error": null,
+        "viewport": {
+          "logical_height": 900.0,
+          "logical_width": 1440.0,
+          "pixels_per_point": 1.0
+        }
+      }
+    },
+    {
+      "role": "tools",
+      "path": "docs/design/studio-redesign-v1/implemented-tools.png",
+      "source": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\tools\\screenshot-capture.png",
+      "sha256": "550827c9877916ff3711af4bed7d011e0cafb7d2d65fda93683738027cc39932",
+      "dimensions": [
+        1280,
+        800
+      ],
+      "alpha": [
+        255,
+        255
+      ],
+      "fit": "native whole viewport; no crop",
+      "budget": "internal reference only, not shipped UI texture",
+      "provenance": "actual proprietary egui native capture; original local synthetic raster footage/PCM; no external media",
+      "visual_review": "root inspected; B hierarchy and reachable controls accepted at recorded 100% DPI",
+      "report": {
+        "asset_capture_wait_expired": false,
+        "asset_evidence": {
+          "complete": true,
+          "failed_assets": 0,
+          "thumbnails": 8,
+          "waveforms": 8
+        },
+        "capture": {
+          "assets": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "physical_height": 800,
+          "physical_width": 1280,
+          "playhead_frame": 720,
+          "presented_frame": [
+            2,
+            720
+          ],
+          "project_revision": 2,
+          "viewport": {
+            "logical_height": 800.0,
+            "logical_width": 1280.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "capture_only": true,
+        "elapsed_ms": 1594.4287,
+        "error": null,
+        "limitations": [
+          "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+          "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+          "Concurrent external edits may change the project; this capture path submits no editing commands."
+        ],
+        "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\tools\\screenshot-capture.png",
+        "passed": true,
+        "playhead_frame": 720,
+        "presented_frame": [
+          2,
+          720
+        ],
+        "project_revision": 2,
+        "schema_version": 1,
+        "screenshot_saved": true,
+        "session_error": null,
+        "viewport": {
+          "logical_height": 800.0,
+          "logical_width": 1280.0,
+          "pixels_per_point": 1.0
+        }
+      }
+    },
+    {
+      "role": "empty",
+      "path": "docs/design/studio-redesign-v1/implemented-empty.png",
+      "source": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\empty\\screenshot-capture.png",
+      "sha256": "bcbf447dc8e6cf59837f3f374a7861a18e9b662c9d0a3c254f0f6ec03977575e",
+      "dimensions": [
+        1280,
+        800
+      ],
+      "alpha": [
+        255,
+        255
+      ],
+      "fit": "native whole viewport; no crop",
+      "budget": "internal reference only, not shipped UI texture",
+      "provenance": "actual proprietary egui native capture; original local synthetic raster footage/PCM; no external media",
+      "visual_review": "root inspected; B hierarchy and reachable controls accepted at recorded 100% DPI",
+      "report": {
+        "asset_capture_wait_expired": false,
+        "asset_evidence": {
+          "complete": false,
+          "failed_assets": 0,
+          "thumbnails": 0,
+          "waveforms": 0
+        },
+        "capture": {
+          "assets": {
+            "complete": false,
+            "failed_assets": 0,
+            "thumbnails": 0,
+            "waveforms": 0
+          },
+          "physical_height": 800,
+          "physical_width": 1280,
+          "playhead_frame": 0,
+          "presented_frame": null,
+          "project_revision": null,
+          "viewport": {
+            "logical_height": 800.0,
+            "logical_width": 1280.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "capture_only": true,
+        "elapsed_ms": 702.9249,
+        "error": null,
+        "limitations": [
+          "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+          "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+          "Concurrent external edits may change the project; this capture path submits no editing commands."
+        ],
+        "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-ad2833e1b4c545218659f2a46464816b\\empty\\screenshot-capture.png",
+        "passed": true,
+        "playhead_frame": 0,
+        "presented_frame": null,
+        "project_revision": null,
+        "schema_version": 1,
+        "screenshot_saved": true,
+        "session_error": null,
+        "viewport": {
+          "logical_height": 800.0,
+          "logical_width": 1280.0,
+          "pixels_per_point": 1.0
+        }
+      }
+    }
+  ]
+}

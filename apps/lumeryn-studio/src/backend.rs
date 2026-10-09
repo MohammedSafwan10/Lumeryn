@@ -8,6 +8,10 @@ use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum Command {
+    Create {
+        path: PathBuf,
+        epoch: u64,
+    },
     Open {
         path: PathBuf,
         epoch: u64,
@@ -149,6 +153,15 @@ impl Backend {
                                 }
                                 Err(error) => { emit(&responses, &ctx, epoch, Message::Error { label: "Open project".into(), message: error.to_string() }).await; }
                             }
+                        }
+                        Command::Create { path, epoch: request_epoch } => {
+                            let result = async {
+                                let project = Project::new("Untitled project".into(), 1280, 720, lumeryn_core::time::FrameRate::new(30, 1)?)?;
+                                let client = Client::connect(&path).await?;
+                                client.call(Request::Create { project }).await?;
+                                Ok(Value::String(path.display().to_string()))
+                            }.await;
+                            complete(&responses, &ctx, request_epoch, "Create project".into(), result).await;
                         }
                         Command::Screenshot { path, width, height, rgba } => {
                             let saved = path.clone();

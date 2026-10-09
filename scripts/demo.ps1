@@ -1,12 +1,42 @@
 # Generated/trusted media only. No downloads or source-media mutation.
-param([switch]$Motion)
+param([switch]$Motion, [switch]$SkipBuild)
 $ErrorActionPreference = 'Stop'
 $lumerynRoot = Split-Path $PSScriptRoot -Parent
+function Wait-LumerynBuildFiles([string[]]$Paths) {
+    $buildWatch = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $buildLocked = [Collections.Generic.List[string]]::new()
+        foreach ($buildPath in $Paths) {
+            if (-not (Test-Path -LiteralPath $buildPath -PathType Leaf)) { continue }
+            $buildHandle = $null
+            try { $buildHandle = [IO.File]::Open($buildPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+            catch [IO.IOException] { $buildLocked.Add($buildPath) }
+            finally { if ($buildHandle) { $buildHandle.Dispose() } }
+        }
+        if ($buildLocked.Count -eq 0) { return }
+        if ($buildWatch.Elapsed.TotalSeconds -ge 10) {
+            throw ('Build executable is still in use after a bounded wait: ' + ($buildLocked -join ', ') + '. Close your own Studio/service session or use -SkipBuild with the current tested binaries.')
+        }
+        Start-Sleep -Milliseconds 100
+    } while ($true)
+}
+function Write-LumerynJsonArtifact([string]$Path, [object]$Value, [int]$Depth = 20) {
+    $artifactBytes = [Text.UTF8Encoding]::new($false).GetBytes((ConvertTo-Json -InputObject $Value -Depth $Depth))
+    $artifactFile = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try { $artifactFile.Write($artifactBytes, 0, $artifactBytes.Length); $artifactFile.Flush($true) }
+    finally { $artifactFile.Dispose() }
+}
 Push-Location $lumerynRoot
 try {
-    cargo build -p lumeryn-cli --locked -j 4
-    if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
     $lumerynCli = Join-Path $lumerynRoot 'target/debug/lumeryn.exe'
+    if (-not $SkipBuild) {
+        Wait-LumerynBuildFiles -Paths @($lumerynCli)
+        cargo build -p lumeryn-cli --locked -j 4
+        if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+    }
+    if (-not (Test-Path -LiteralPath $lumerynCli -PathType Leaf)) {
+        throw 'CLI binary is missing; build the current source before using -SkipBuild'
+    }
     $lumerynRun = Join-Path $lumerynRoot ('.lumeryn-scratch/demo-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $lumerynRun | Out-Null
     $lumerynSource = Join-Path $lumerynRun 'generated.mkv'
@@ -40,6 +70,8 @@ try {
     & $lumerynFfmpeg -v error -nostdin -n -i $lumerynOutput -vf ('fps=' + $lumerynSheetRate + ',scale=320:180,tile=3x2') -frames:v 1 $lumerynSheet
     if ($LASTEXITCODE -ne 0) { throw 'Contact sheet failed' }
     $lumerynSummary = [ordered]@{fixture=$(if ($Motion) { 'generated moving 720p testsrc2 and 440Hz sine' } else { 'generated color sequence and 440Hz sine' }); render=$lumerynRender; render_wall_ms=$lumerynWatch.Elapsed.TotalMilliseconds; reopened_revision=$lumerynReopened.revision; integrity=$lumerynCheck; hardware=$lumerynHardware; contact_sheet=$lumerynSheet; project=$lumerynProject}
-    $lumerynSummary | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $lumerynRun 'summary.json') -Encoding utf8
+    $lumerynSummary['build_skipped'] = [bool]$SkipBuild
+    $lumerynSummary['cli_binary_sha256'] = (Get-FileHash -LiteralPath $lumerynCli -Algorithm SHA256).Hash
+    Write-LumerynJsonArtifact -Path (Join-Path $lumerynRun 'summary.json') -Value $lumerynSummary -Depth 10
     $lumerynSummary | ConvertTo-Json -Depth 10
 } finally { Pop-Location }

@@ -21,6 +21,9 @@ egui_dock.workspace = true
 wgpu.workspace = true
 image.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+rfd = { version = "=0.17.2", default-features = false }
+
 [[bin]]
 name = "lumeryn-studio"
 path = "src/main.rs"
