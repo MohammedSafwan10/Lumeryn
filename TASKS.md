@@ -1,5 +1,27 @@
 # Task board
 
+## Next composition milestone — researched plan, implementation pending
+
+Scope: owner-authorized layers/gaps/images/transforms; editable text/vectors/animation/templates; colour/effects/fades; transitions/speed/freeze. [Delivery plan](docs/roadmap/COMPOSITION_DELIVERY_PLAN.md), ADR0023 and [native state contract](docs/design/COMPOSITION_UX.md) are the execution contract.
+
+- [x] Three independently owned official-source research reports; concrete code/migration/colour/licensing/resource constraints reviewed.
+- [x] Generated external FFmpeg composition feasibility/baseline: timed crop/rotate/translucent PNG/gap, full decoded720p30/60frames, actual frames inspected. Not product implementation; docs/testing/COMPOSITION_SPIKE.md.
+- [ ] V0: checked offgraph Rust VisualPlan and one shared picture reference; exact rational time, active intervals, unsupported preflight and bounded output.
+- [ ] V1: explicit schema3 all-history migration and two moving layers/PNG holds/gaps with CLI/Studio/shared preview/export.
+- [ ] V2: crop/fit/position/size/pivot/flip/rotation/opacity and native precise/direct manipulation.
+- [ ] V3: measured one-stack typography selection and editable static titles/shapes with pinned fonts.
+- [ ] V4: deterministic keyframes, five original editable presets and explainer components.
+- [ ] V5: versioned SDR colour/original looks, visual/audio fades and reset.
+- [ ] V6: verified-handle transitions, rational speed/explicit pitch/ripple and exact-source freeze.
+- [ ] V7: GPU/cache/proxy expansion only after pixel conformance and total-cost benchmarks.
+- [ ] Every slice: schema/capabilities/dry-run/events/history, actual UHD/portrait24/25/30/60, visual/audio/source checks and physical native/device/DPI acceptance. No unsupported decorative controls.
+
+## Owner-requested PC FFmpeg update — complete
+
+- [x] Verify latest official stable9.0.2 and upstream-linked Windows release; checksum-verified external install with ffprobe pair and8.1.1 rollback preserved.
+- [x] Reversible userPATHactivation, fresh-environment doctor/probe and explicit existing-session tool flags documented; do not claim existing Studio auto-upgraded.
+- [x]40selected current compiled regression tests across9suites passed with9.0.2; actual external composition decode/gap/frames rechecked. Evidence: docs/testing/FFMPEG9_COMPATIBILITY.md.
+
 ## Private repository setup — complete
 
 - [x] Verify active GitHub account; create owner-authorized private MohammedSafwan10/Lumeryn repository and origin remote.
@@ -91,4 +113,4 @@ DONE above describes the scoped verified baseline. The full professional-editor 
 
 Next executable creative slice: roadmap C1-C8 starts with a versioned semantic scene schema, then native shapes/text/animation evaluated in the headless core through the same revision service, Studio preview and decoded export parity. Research Parley/cosmic-text/Vello/resvg before actual integration. UI fonts do not implement professional export typography. Then reusable explainer components, narration cues and scene-local QA, followed by editable60second neural-network Demo A. Optional approved media/Blender support Demos B/C later.
 
-Global SQLite model/settings/benchmarks storage, transcript FTS5, vector indexes, professional mixing and persistent waveform caching, effects, undo/redo, complete hardware scheduling, AI models, disk proxies/cache, installer/code signing and signed updates remain staged. No task implies shipped support without recorded tests.
+Global SQLite model/settings/benchmarks storage, transcript FTS5, vector indexes, professional mixing and persistent waveform caching, effects, complete hardware scheduling, AI models, disk proxies/cache, installer/code signing and signed updates remain staged. No task implies shipped support without recorded tests.

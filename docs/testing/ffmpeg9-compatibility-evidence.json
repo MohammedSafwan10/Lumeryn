@@ -1,0 +1,102 @@
+{
+  "date": "2026-10-10",
+  "tool_version": "9.0.2-essentials_build-www.gyan.dev",
+  "scope": "Selected precompiled current milestone tests with explicit new executable paths; no full Rust build/default/media/deny rerun or new native-window capture",
+  "passed_total": 40.0,
+  "suites": [
+    {
+      "suite": "workflow",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "test_binary": "workflow-e5e8b732272809d5.exe",
+      "binary_sha256": "4F9385692EC7156DF806FEECA1018224C5A02F8CE01BF28A8A8C2D1E4A7A562E",
+      "log": ".lumeryn-scratch/ffmpeg9-regression/workflow.log"
+    },
+    {
+      "suite": "media_regressions",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "test_binary": "media_regressions-76fd5676ddab3bdc.exe",
+      "binary_sha256": "9B7873BB7828EAE7AE8643EA497063FAB5A5960B2E109D4EE60776C79622107B",
+      "log": ".lumeryn-scratch/ffmpeg9-regression/media_regressions.log"
+    },
+    {
+      "suite": "uhd_export",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "test_binary": "uhd_export-232e02dc4a5552be.exe",
+      "binary_sha256": "DD074FACA49749F549C1D76C2ABAC2FCB752392DD7FF25C053DD64B78978885E",
+      "log": ".lumeryn-scratch/ffmpeg9-regression/uhd_export.log"
+    },
+    {
+      "suite": "audio_composition",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "test_binary": "audio_composition-242a4b86c15abd51.exe",
+      "binary_sha256": "140333E5328ACBEFF892378E6D65851D161C3553F2BC4C9600BD0E6217578D76",
+      "log": ".lumeryn-scratch/ffmpeg9-regression/audio_composition.log"
+    },
+    {
+      "suite": "import_stages",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "test_binary": "import_stages-26f3dc0e90c3b112.exe",
+      "binary_sha256": "4C9E81E6445C8FACEB2F59795317AF78EE48DE6E5C1E0CAD69E1C2328572C606",
+      "log": ".lumeryn-scratch/ffmpeg9-regression/import_stages.log"
+    },
+    {
+      "suite": "fps_workflow",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "test_binary": "fps_workflow-2fc553766f7d3e89.exe",
+      "binary_sha256": "01D055730567665FBC417D908E98F7B4C4A2D22255AE7A2AB44811CADD80DA5A",
+      "log": ".lumeryn-scratch/ffmpeg9-regression/fps_workflow.log"
+    },
+    {
+      "suite": "preview",
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0,
+      "test_binary": "lumeryn_preview-e05eec08f9c88d2d.exe",
+      "binary_sha256": "AEA139598D8C5104390BF4446E83425F8B184AF1ACB1A69361F223C73AAEA50B",
+      "log": ".lumeryn-scratch/ffmpeg9-regression/preview.log"
+    },
+    {
+      "suite": "generated_preview",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "test_binary": "generated_preview-8ffb5fdefc18f4d8.exe",
+      "binary_sha256": "D379B180EDD4CE02647D28A5BEF77E5D07B9CB1F1EDD2E7D1620CA10DFA6A8E3",
+      "log": ".lumeryn-scratch/ffmpeg9-regression/generated_preview.log"
+    },
+    {
+      "suite": "audition",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "test_binary": "audition-53b4d5c33e150265.exe",
+      "binary_sha256": "6C706B511D657B7688BADEE23EBA04DF9E0EB7E5F5112824CB17DF478979BBB4",
+      "log": ".lumeryn-scratch/ffmpeg9-regression/audition.log"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "ffmpeg.exe",
+      "sha256": "3256173F3F8BFFD7DF12227C68ADF68025EDB1832273A9530688A7BB1ED8EDEC"
+    },
+    {
+      "tool": "ffprobe.exe",
+      "sha256": "F0D36ECBBDD3BCFAC3EFA078C96C7271C2E68B3810595552AC3B7F17E9A65C52"
+    }
+  ],
+  "composition_spike": ".lumeryn-scratch/composition-spike-e8263c1f00e3401d9c99c749548d35da/report.json",
+  "owner_project_changed": false,
+  "running_owner_studio_restarted": false
+}

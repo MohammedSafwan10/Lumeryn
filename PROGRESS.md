@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-10-10 — composition plan and latest stable external tools
+
+Owner authorized the four composition feature families. Three specialists researched concrete source, current official technology/licensing and migration/timing/resource/UI risks in separately owned reports. Root integrated ADR0023, COMPOSITION_DELIVERY_PLAN and COMPOSITION_UX, preserving approved native design and all existing graph/service/export semantics. Independent review tightened rational output-time/fade/speed evaluation, alpha adapter conversions, same-revision schema invalidation, track visibility meaning and silent-first freeze. V0 checked Rust plan is next; schema3/layered editing/text/effects/transitions/speed remain pending. No production Rust/dependency/schema or owner-project change.
+
+Executed a reproducible generated external CPU composition spike with cropped/rotated translucent PNG, bounded layer intervals and final black gap. Full decoded720p30/60frame/2second metadata and actual frames24/50 were inspected. Original8.1.1 rerun plain/composed medians98.507/154.097ms include startup/decode/filter-to-null; no native/GPU/UHD/colour-management claim. Script and evidence/limits are COMPOSITION_SPIKE.
+
+Owner additionally requested latest PC FFmpeg. Official current stable9.0.2 Gyan Essentials pair was downloaded from the upstream-linked provider, SHA256 checked before execution and installed externally side-by-side; old8.1.1 preserved. One reversible userPATHprefix selects both tools in refreshed environments; current owner Studio/service was not stopped and may retain inherited8.1.1. Tiny decode/probe/doctor passed, plus root40 selected precompiled current-milestone tests across9suites with explicit9.0.2 tools, including UHD/audio/import/FPS/real-preview/audition. Same external composition script passed9.0.2 and actual overlay/gap pixels inspected. Exact hashes, rollback, environment limits and executed versus untested checks: FFMPEG_TOOL_UPDATE and FFMPEG9_COMPATIBILITY. PowerShell script parse and documentation links/whitespace checked; no full Rust rebuild/gate rerun was claimed.
+
 ## 2026-10-10 — owner-authorized private GitHub repository
 
 Created https://github.com/MohammedSafwan10/Lumeryn under the verified active GitHub account, explicitly PRIVATE, with origin tracking master. Pushed existing local history and README/ignore commit fd342bc; remote branch SHA matched the local commit and private visibility/default branch were rechecked. No public license, release, workflow, customer media or binaries were added. This private upload was explicitly authorized by the owner.

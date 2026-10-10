@@ -41,3 +41,7 @@ Vello CPU0.3.0 warns about unsupported filter graphs and experimental glyph cach
 ## Required staged acceptance
 
 Execute TA-01..TA-05 in `docs/research/TYPOGRAPHY_AUDIO.md`: first sample-exact lossless mix/waveform CLI slice, then source-rate conversion, native text/SVG frames, WASAPI clocks and GPU/ASS compatibility. Include multilingual golden frames, fixed licensed fonts, hostile resources, impulse/short-clip/delay fixtures, channel/gain math, no callback allocations, device removal and ten-minute AV drift. Record actual latency/memory measurements. All these capabilities remain planned until their implementation and acceptance evidence are recorded.
+
+## 2026-10-10 composition follow-up
+
+ADR0023 and docs/research/TYPOGRAPHY_ANIMATION_NEXT.md refine this provisional selection into a measured single-layout-engine experiment and shared preview/export raster contract. No new typography dependency is selected by the research; exact Windows versions, multilingual fallback and Vello filter limitations remain gated. Existing canonical48k independent audio is ADR0021; fades/tempo/transitions follow the shared composition delivery plan.
