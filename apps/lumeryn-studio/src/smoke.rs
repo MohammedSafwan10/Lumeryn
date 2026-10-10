@@ -31,6 +31,15 @@ enum Stage {
         original: u64,
     },
     StartHistory,
+    StartDrop {
+        step: u8,
+        original: Uuid,
+    },
+    Drop {
+        step: u8,
+        original: Uuid,
+        revision: u64,
+    },
     History {
         revision: u64,
         frames: u64,
@@ -445,18 +454,20 @@ impl Smoke {
                     self.stage = Stage::StartHistory;
                     return;
                 }
-                if session.export(self.directory.join("studio-smoke-export.mp4")) {
-                    self.stage = Stage::Export {
-                        ui_frames: session.ui_frames,
-                    };
-                }
+                self.stage = Stage::StartDrop {
+                    step: 0,
+                    original: project.clips[0].id,
+                };
             }
             Stage::StartHistory => {
                 let Some(step) = self.history_steps.front() else {
-                    if session.export(self.directory.join("studio-smoke-export.mp4")) {
-                        self.stage = Stage::Export {
-                            ui_frames: session.ui_frames,
-                        };
+                    if let Some(original) = session
+                        .project
+                        .as_ref()
+                        .and_then(|project| project.clips.first())
+                        .map(|clip| clip.id)
+                    {
+                        self.stage = Stage::StartDrop { step: 0, original };
                     }
                     return;
                 };
@@ -530,6 +541,96 @@ impl Smoke {
                 }
                 self.check("native_shared_history_step",json!({"operation":label,"revision":revision,"frames":frames,"clips":clips,"media":expected_alias.map(|(id,alias)|json!({"id":id,"alias":alias})),"native_presented":session.last_frame}));
                 self.stage = Stage::StartHistory;
+            }
+            Stage::StartDrop { step, original } => {
+                if step == 4 {
+                    if session.export(self.directory.join("studio-smoke-export.mp4")) {
+                        self.stage = Stage::Export {
+                            ui_frames: session.ui_frames,
+                        };
+                    }
+                    return;
+                }
+                let Some(project) = &session.project else {
+                    return;
+                };
+                let revision = project.revision;
+                let submitted = match step {
+                    0 => {
+                        let Some(clip) = project.clips.iter().find(|clip| clip.id == original)
+                        else {
+                            return;
+                        };
+                        let Some(payload) =
+                            session.drag_payload(timeline::DragSource::Media(clip.media_id))
+                        else {
+                            return;
+                        };
+                        session.drop_on_timeline(payload, Some(original))
+                    }
+                    1 => {
+                        let Some(before) = project
+                            .clips
+                            .iter()
+                            .find(|clip| clip.id != original)
+                            .map(|clip| clip.id)
+                        else {
+                            return;
+                        };
+                        let Some(payload) =
+                            session.drag_payload(timeline::DragSource::Clip(original))
+                        else {
+                            return;
+                        };
+                        session.drop_on_timeline(payload, Some(before))
+                    }
+                    _ => session.undo(),
+                };
+                if submitted {
+                    self.stage = Stage::Drop {
+                        step,
+                        original,
+                        revision: revision + 1,
+                    };
+                }
+            }
+            Stage::Drop {
+                step,
+                original,
+                revision,
+            } => {
+                let Some(project) = &session.project else {
+                    return;
+                };
+                let label = if step < 2 { "Drag clip" } else { "Undo" };
+                if project.revision < revision
+                    || session.last_complete.as_deref() != Some(label)
+                    || session
+                        .last_frame
+                        .is_none_or(|(presented, _)| presented != revision)
+                {
+                    return;
+                }
+                let mut clips: Vec<_> = project.clips.iter().collect();
+                clips.sort_by_key(|clip| clip.at_frame);
+                let expected_clips = if step == 3 { 1 } else { 2 };
+                let first_original = clips.first().is_some_and(|clip| clip.id == original);
+                if project.revision != revision
+                    || clips.len() != expected_clips
+                    || first_original != (step == 1 || step == 3)
+                {
+                    self.finish(
+                        session,
+                        false,
+                        Some(format!("Native drop order mismatch at step {step}")),
+                    );
+                    return;
+                }
+                self.check("native_shared_drop_step",json!({"step":step,"revision":revision,"order":clips.iter().map(|clip|clip.id).collect::<Vec<_>>(),"frames":timeline::total_frames(project),"native_presented":session.last_frame}));
+                self.stage = Stage::StartDrop {
+                    step: step + 1,
+                    original,
+                };
             }
             Stage::Export { ui_frames } => {
                 if session.render_busy || session.last_complete.as_deref() != Some("Export") {

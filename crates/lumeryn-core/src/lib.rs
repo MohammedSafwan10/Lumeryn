@@ -12,3 +12,4 @@ pub use error::{Error, Result};
 pub use media::MediaTools;
 pub use model::{Batch, Edit, Project};
 pub use storage::Store;
+pub mod audio_plan;

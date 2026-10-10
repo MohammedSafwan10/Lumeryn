@@ -1,11 +1,13 @@
 param([switch]$Media, [switch]$Deny)
 $ErrorActionPreference = 'Stop'
+# Honor isolated Cargo output so acceptance never replaces a running user editor.
+$lumerynTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR, (Split-Path $PSScriptRoot -Parent)) } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'target' }
 $lumerynRoot = Split-Path $PSScriptRoot -Parent
 function Wait-LumerynTestService {
     # Integration tests start the real CLI service, which exits after ten idle seconds.
     # Windows prevents Cargo replacing that executable until the service releases it.
     $testWatch = [Diagnostics.Stopwatch]::StartNew()
-    $testBinary = Join-Path $lumerynRoot 'target/debug/lumeryn.exe'
+    $testBinary = Join-Path $lumerynTarget 'debug/lumeryn.exe'
     while (Test-Path -LiteralPath $testBinary) {
         $testHandle = $null
         try {
@@ -30,6 +32,8 @@ try {
     cargo test --locked -j 4
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
     if ($Media) {
+        cargo test -p lumeryn-core --lib --locked -j 4 -- --include-ignored
+        if ($LASTEXITCODE -ne 0) { throw 'Core audio scheduling acceptance failed' }
         Wait-LumerynTestService
         cargo test --locked --test workflow --test media_regressions --test live_service --test uhd_export --test history_workflow --test undo_redo --test media_management -j 4 -- --include-ignored
         if ($LASTEXITCODE -ne 0) { throw 'Media acceptance failed' }

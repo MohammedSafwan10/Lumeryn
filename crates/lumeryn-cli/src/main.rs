@@ -331,6 +331,21 @@ enum TimelineCommand {
 
 #[derive(Debug, Subcommand)]
 enum ClipCommand {
+    /// Insert source media at a clip boundary and ripple the contiguous sequence.
+    Insert {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        id: Option<Uuid>,
+        #[arg(long)]
+        media_id: Uuid,
+        #[arg(long)]
+        before_clip_id: Option<Uuid>,
+        #[arg(long, default_value = "0")]
+        source_in_frame: u64,
+        #[arg(long)]
+        duration_frames: u64,
+    },
     /// Copy one exact clip into a versioned same-project payload (result.clipboard).
     Copy {
         #[arg(long)]
@@ -589,7 +604,7 @@ async fn execute(cli: Cli) -> Result<Value> {
         }
         Command::Capabilities => Ok(json!({
             "api_version":1,"project_schema_version":1,"output":"json",
-            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","media.list","media.inspect","media.rename","media.remove","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
+            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","media.list","media.inspect","media.rename","media.remove","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.insert","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
             "media_management":{"alias":"project-only; null resets source filename display","alias_maximum_utf8_bytes":256,"remove":"unused project references only; rejects referenced media; source bytes unchanged","undo_redo":true,"dry_run":true},
             "history":{"undo_redo":"new monotonic revisions; logical history restored transactionally","undo_redo_batch":"sole operation only","branch_edit_clears_redo":true},
             "clipboard":{"version":1,"maximum_payload_bytes":16384,"scope":"same project and already-imported BLAKE3 source identity","payload":"result.clipboard object","cross_project_transfer":"staged","paste":"authoritative typed PasteClip with new stable ID and exact source ranges"},
@@ -931,6 +946,31 @@ async fn execute(cli: Cli) -> Result<Value> {
                 Ok(
                     json!({"revision":project.revision,"frame_rate":project.frame_rate,"video_track_id":project.video_track_id,"clips":project.clips}),
                 )
+            }
+            TimelineCommand::Clip(ClipCommand::Insert {
+                write,
+                id,
+                media_id,
+                before_clip_id,
+                source_in_frame,
+                duration_frames,
+            }) => {
+                let id = operation_id(id, &write)?;
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::InsertClip {
+                            id,
+                            media_id,
+                            before_clip_id,
+                            source_in_frame,
+                            duration_frames,
+                        }],
+                    },
+                    false,
+                    &tools,
+                )
+                .await
             }
             TimelineCommand::Clip(ClipCommand::Add {
                 write,

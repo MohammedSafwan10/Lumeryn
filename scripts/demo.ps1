@@ -1,6 +1,8 @@
 # Generated/trusted media only. No downloads or source-media mutation.
 param([switch]$Motion, [switch]$SkipBuild)
 $ErrorActionPreference = 'Stop'
+# Honor isolated Cargo output so acceptance never replaces a running user editor.
+$lumerynTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR, (Split-Path $PSScriptRoot -Parent)) } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'target' }
 $lumerynRoot = Split-Path $PSScriptRoot -Parent
 function Wait-LumerynBuildFiles([string[]]$Paths) {
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -28,7 +30,7 @@ function Write-LumerynJsonArtifact([string]$Path, [object]$Value, [int]$Depth = 
 }
 Push-Location $lumerynRoot
 try {
-    $lumerynCli = Join-Path $lumerynRoot 'target/debug/lumeryn.exe'
+    $lumerynCli = Join-Path $lumerynTarget 'debug/lumeryn.exe'
     if (-not $SkipBuild) {
         Wait-LumerynBuildFiles -Paths @($lumerynCli)
         cargo build -p lumeryn-cli --locked -j 4

@@ -1,6 +1,8 @@
 # Opens the real native window and modifies only freshly generated disposable projects.
 param([switch]$SkipBuild, [switch]$Uhd, [switch]$Portrait, [switch]$History)
 $ErrorActionPreference = 'Stop'
+# Honor isolated Cargo output so acceptance never replaces a running user editor.
+$lumerynTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR, (Split-Path $PSScriptRoot -Parent)) } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'target' }
 if ($Portrait -and -not $Uhd) { throw '-Portrait requires -Uhd in this acceptance script' }
 $nativeRoot = Split-Path $PSScriptRoot -Parent
 function Wait-LumerynBuildFiles([string[]]$Paths) {
@@ -30,8 +32,8 @@ function Write-LumerynJsonArtifact([string]$Path, [object]$Value, [int]$Depth = 
 Push-Location $nativeRoot
 $nativeProcess = $null
 try {
-    $nativeCli = Join-Path $nativeRoot 'target/debug/lumeryn.exe'
-    $nativeStudio = Join-Path $nativeRoot 'target/debug/lumeryn-studio.exe'
+    $nativeCli = Join-Path $lumerynTarget 'debug/lumeryn.exe'
+    $nativeStudio = Join-Path $lumerynTarget 'debug/lumeryn-studio.exe'
     if (-not $SkipBuild) {
         Wait-LumerynBuildFiles -Paths @($nativeCli, $nativeStudio)
         cargo build --workspace --locked -j 4
@@ -56,7 +58,7 @@ try {
     if ($Uhd) { $nativeArguments += '--smoke-uhd' }
     if ($History) { $nativeArguments += '--smoke-history' }
     $nativeWatch = [Diagnostics.Stopwatch]::StartNew()
-    $nativeProcess = Start-Process -FilePath (Join-Path $nativeRoot 'target/debug/lumeryn-studio.exe') -ArgumentList $nativeArguments -WindowStyle Normal -PassThru -RedirectStandardError (Join-Path $nativeDirectory 'stderr.log') -RedirectStandardOutput (Join-Path $nativeDirectory 'stdout.log')
+    $nativeProcess = Start-Process -FilePath (Join-Path $lumerynTarget 'debug/lumeryn-studio.exe') -ArgumentList $nativeArguments -WindowStyle Normal -PassThru -RedirectStandardError (Join-Path $nativeDirectory 'stderr.log') -RedirectStandardOutput (Join-Path $nativeDirectory 'stdout.log')
     $nativeSamples = [Collections.Generic.List[object]]::new()
     $nativeGpuSamples = [Collections.Generic.List[object]]::new()
     $nativeSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
@@ -88,6 +90,7 @@ try {
     Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'process-metrics.json') -Value $nativeMetrics -Depth 10
     if ($nativeProcess.ExitCode -ne 0 -or -not $nativeReport.passed) { throw ('Native smoke failed; inspect ' + $nativeDirectory) }
     if ($History -and (-not $nativeReport.history_clipboard_acceptance -or @($nativeReport.checks | Where-Object check -eq 'native_shared_history_step').Count -ne 12)) { throw 'Twelve native history/clipboard/media-name transitions were not verified' }
+    if (@($nativeReport.checks | Where-Object check -eq 'native_shared_drop_step').Count -ne 4) { throw 'Native insert/reorder/undo transitions were not verified' }
     if ($Uhd) {
         $expectedWidth = if ($Portrait) { 2160 } else { 3840 }
         $expectedHeight = if ($Portrait) { 3840 } else { 2160 }
@@ -103,7 +106,7 @@ try {
         if ($audio.sample_rate -ne '48000' -or $audio.channels -ne 2 -or $audio.codec_name -ne 'aac' -or [Math]::Abs([double]$audio.duration - [double]$rendered.duration_seconds) -gt 0.05) { throw 'Actual native UHD file audio/duration mismatch' }
         Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'uhd-file-verified.json') -Value @{passed=$true;portrait=[bool]$Portrait;probe=$probe;render_result=$rendered;limits='720p synthetic source is upscaled; source-detail and marker-sync acceptance belongs to uhd_export tests. Physical speaker/display synchronization is untested.'}
     }
-    & (Join-Path $nativeRoot 'target/debug/lumeryn.exe') project check --project $nativeDemo.project --assets
+    & (Join-Path $lumerynTarget 'debug/lumeryn.exe') project check --project $nativeDemo.project --assets
     if ($LASTEXITCODE -ne 0) { throw 'Post-Studio project integrity failed' }
     [ordered]@{passed=$true;project=$nativeDemo.project;report=$nativeReportPath;screenshot=(Join-Path $nativeDirectory 'studio-native.png');metrics=(Join-Path $nativeDirectory 'process-metrics.json')} | ConvertTo-Json
 } finally {

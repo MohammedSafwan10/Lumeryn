@@ -83,6 +83,14 @@ pub enum Edit {
         source_in_frame: u64,
         duration_frames: u64,
     },
+    /// Insert before a clip, or append with None, and ripple the contiguous sequence.
+    InsertClip {
+        id: Uuid,
+        media_id: Uuid,
+        before_clip_id: Option<Uuid>,
+        source_in_frame: u64,
+        duration_frames: u64,
+    },
     TrimClip {
         clip_id: Uuid,
         source_in_frame: u64,
@@ -327,6 +335,30 @@ impl Project {
                     source_in_frame: *source_in_frame,
                     duration_frames: *duration_frames,
                 });
+            }
+            Edit::InsertClip {
+                id,
+                media_id,
+                before_clip_id,
+                source_in_frame,
+                duration_frames,
+            } => {
+                self.require_contiguous()?;
+                let target = match before_clip_id {
+                    Some(before) => self.clip_index(*before)?,
+                    None => self.clips.len(),
+                };
+                let clip = Clip {
+                    id: *id,
+                    media_id: *media_id,
+                    track_id: self.video_track_id,
+                    at_frame: 0,
+                    source_in_frame: *source_in_frame,
+                    duration_frames: *duration_frames,
+                };
+                self.validate_clip(&clip)?;
+                self.clips.insert(target, clip);
+                self.reposition_contiguous()?;
             }
             Edit::TrimClip {
                 clip_id,

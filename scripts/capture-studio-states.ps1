@@ -6,6 +6,8 @@ param(
     [ValidateRange(0, [long]::MaxValue)][long]$CaptureFrame = 720
 )
 $ErrorActionPreference = 'Stop'
+# Honor isolated Cargo output so acceptance never replaces a running user editor.
+$lumerynTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR, (Split-Path $PSScriptRoot -Parent)) } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'target' }
 $captureRoot = Split-Path $PSScriptRoot -Parent
 function Wait-LumerynBuildFiles([string[]]$Paths) {
     $buildWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -33,8 +35,8 @@ function Write-LumerynJsonArtifact([string]$Path, [object]$Value, [int]$Depth = 
 }
 Push-Location $captureRoot
 try {
-    $captureCli = Join-Path $captureRoot 'target/debug/lumeryn.exe'
-    $captureStudio = Join-Path $captureRoot 'target/debug/lumeryn-studio.exe'
+    $captureCli = Join-Path $lumerynTarget 'debug/lumeryn.exe'
+    $captureStudio = Join-Path $lumerynTarget 'debug/lumeryn-studio.exe'
     if (-not $SkipBuild) {
         Wait-LumerynBuildFiles -Paths @($captureCli, $captureStudio)
         cargo build -p lumeryn-cli -p lumeryn-studio --locked -j 4

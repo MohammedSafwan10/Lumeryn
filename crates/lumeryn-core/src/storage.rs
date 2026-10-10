@@ -372,6 +372,7 @@ impl Store {
                 match operation {
                     Edit::Import { id, .. }
                     | Edit::AddClip { id, .. }
+                    | Edit::InsertClip { id, .. }
                     | Edit::PasteClip { id, .. }
                     | Edit::DuplicateClip { id, .. } => object_ids.push(*id),
                     Edit::TrimClip { clip_id, .. }

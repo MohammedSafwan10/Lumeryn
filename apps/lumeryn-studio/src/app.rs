@@ -1031,8 +1031,16 @@ impl Session {
                                 ui.set_width(width);
                                 let (rect, response) = ui.allocate_exact_size(
                                     Vec2::new(width, width * 9.0 / 16.0),
-                                    Sense::click(),
+                                    Sense::click_and_drag(),
                                 );
+                                if self.connected && !self.edit_busy && response.drag_started_by(egui::PointerButton::Primary) {
+                                    response.dnd_set_drag_payload(timeline::DragPayload {
+                                        project: project.id,
+                                        revision: project.revision,
+                                        epoch: self.epoch,
+                                        source: timeline::DragSource::Media(media.id),
+                                    });
+                                }
                                 ui.painter().rect_filled(rect, 4.0, design::BACKGROUND);
                                 if let Some(texture) =
                                     self.assets.as_ref().and_then(|a| a.thumbnail(media.id))
@@ -1139,7 +1147,7 @@ impl Session {
                                     );
                                 });
                                 response.on_hover_text(
-                                    "Select media. Double-click a video to add it to the timeline.",
+                                    "Drag a video to the timeline; an insertion marker shows where it will go. Double-click to append.",
                                 );
                                 ui.add(egui::Label::new(media_name(media)).truncate())
                                     .on_hover_text(media.path.display().to_string());
@@ -1187,12 +1195,11 @@ impl Session {
         if let Some(id) = remove {
             self.remove_media(id);
         } else if let Some((media_id, duration_frames)) = add {
-            let at_frame = self.project.as_ref().map_or(0, timeline::total_frames);
             self.edit(
-                Edit::AddClip {
+                Edit::InsertClip {
                     id: Uuid::new_v4(),
                     media_id,
-                    at_frame,
+                    before_clip_id: None,
                     source_in_frame: 0,
                     duration_frames,
                 },
@@ -1612,9 +1619,17 @@ impl Session {
     }
     fn timeline_panel(&mut self, ui: &mut egui::Ui) {
         if let (Some(project), Some(assets)) = (&self.project, &self.assets) {
-            let actions = self
-                .timeline
-                .show(ui, project, assets, self.selected, self.playhead);
+            let actions = self.timeline.show(
+                ui,
+                project,
+                assets,
+                timeline::View {
+                    selected: self.selected,
+                    playhead: self.playhead,
+                    epoch: self.epoch,
+                    editable: self.connected && !self.edit_busy,
+                },
+            );
             for action in actions {
                 match action {
                     timeline::Action::Select(id) => self.select(id),
@@ -1665,6 +1680,10 @@ impl Session {
                             "Reorder clip",
                         );
                     }
+                    timeline::Action::RejectDrop(error) => self.fail(error.into()),
+                    timeline::Action::Drop { payload, before } => {
+                        self.drop_on_timeline(payload, before);
+                    }
                 }
             }
         } else {
@@ -1674,6 +1693,60 @@ impl Session {
                 "Import a video and add it here to start editing.",
             );
         }
+    }
+    pub(crate) fn drag_payload(
+        &self,
+        source: timeline::DragSource,
+    ) -> Option<timeline::DragPayload> {
+        self.project.as_ref().map(|project| timeline::DragPayload {
+            project: project.id,
+            revision: project.revision,
+            epoch: self.epoch,
+            source,
+        })
+    }
+    pub(crate) fn drop_on_timeline(
+        &mut self,
+        payload: timeline::DragPayload,
+        before: Option<Uuid>,
+    ) -> bool {
+        let Some(project) = &self.project else {
+            return false;
+        };
+        if payload.project != project.id
+            || payload.revision != project.revision
+            || payload.epoch != self.epoch
+        {
+            self.fail(
+                "The project changed during this drag. Drag again from the current project.".into(),
+            );
+            return false;
+        }
+        let operation = match payload.source {
+            timeline::DragSource::Clip(clip_id) => Edit::ReorderClip {
+                clip_id,
+                before_clip_id: before,
+            },
+            timeline::DragSource::Media(media_id) => {
+                let Some(video) = project
+                    .media
+                    .iter()
+                    .find(|media| media.id == media_id)
+                    .and_then(|media| media.metadata.video.as_ref())
+                else {
+                    self.fail("This media cannot be placed on the video track.".into());
+                    return false;
+                };
+                Edit::InsertClip {
+                    id: Uuid::new_v4(),
+                    media_id,
+                    before_clip_id: before,
+                    source_in_frame: 0,
+                    duration_frames: video.frames,
+                }
+            }
+        };
+        self.edit(operation, "Drag clip")
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
         design::section(
@@ -2606,6 +2679,54 @@ impl Studio {
         pane(ui, "timeline", layout.timeline, 8, |ui| {
             self.session.timeline_panel(ui)
         });
+        if let Some(payload) = egui::DragAndDrop::payload::<timeline::DragPayload>(ui.ctx())
+            && let Some(pointer) = ui.input(|input| input.pointer.hover_pos())
+            && let Some(project) = &self.session.project
+        {
+            let media_id = match payload.source {
+                timeline::DragSource::Media(id) => Some(id),
+                timeline::DragSource::Clip(id) => project
+                    .clips
+                    .iter()
+                    .find(|clip| clip.id == id)
+                    .map(|clip| clip.media_id),
+            };
+            if let Some(media) = project
+                .media
+                .iter()
+                .find(|media| Some(media.id) == media_id)
+            {
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(
+                    egui::Order::Tooltip,
+                    egui::Id::new("clip-drag-preview"),
+                ));
+                let rect = egui::Rect::from_min_size(
+                    pointer + Vec2::new(16.0, 20.0),
+                    Vec2::new(172.0, 52.0),
+                );
+                painter.rect_filled(rect, 5.0, design::PANEL);
+                painter.rect_stroke(
+                    rect,
+                    5.0,
+                    Stroke::new(1.0, design::ACCENT),
+                    egui::StrokeKind::Inside,
+                );
+                painter.with_clip_rect(rect.shrink(8.0)).text(
+                    rect.left_top() + Vec2::splat(10.0),
+                    egui::Align2::LEFT_TOP,
+                    media.display_name(),
+                    egui::FontId::proportional(13.0),
+                    design::TEXT,
+                );
+                painter.text(
+                    rect.left_bottom() + Vec2::new(10.0, -10.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    "Drag to a clip boundary",
+                    egui::FontId::proportional(11.0),
+                    design::MUTED,
+                );
+            }
+        }
         ui.advance_cursor_after_rect(bounds);
     }
 }
@@ -2646,6 +2767,15 @@ fn pane(
 }
 impl eframe::App for Studio {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+        if !ui.input(|input| input.focused)
+            || self.export_open
+            || self.tools_open
+            || self.fullscreen
+            || self.session.media_rename.is_some()
+            || self.session.picker.is_some()
+        {
+            egui::DragAndDrop::clear_payload(ui.ctx());
+        }
         let started = Instant::now();
         let ctx = ui.ctx().clone();
         self.session.viewport_size = ctx.content_rect().size();
