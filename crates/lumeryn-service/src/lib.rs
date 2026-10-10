@@ -7,7 +7,8 @@ mod windows;
 
 pub use client::Client;
 pub use protocol::{
-    EVENT_CAPACITY, Event, EventBatch, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request, ToolConfig,
+    EVENT_CAPACITY, Event, EventBatch, ImportFailure, ImportJob, ImportSource, ImportSourceStatus,
+    ImportStage, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request, ToolConfig,
 };
 pub use server::serve;
 

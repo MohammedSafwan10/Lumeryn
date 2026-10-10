@@ -1,6 +1,6 @@
 use egui::Context;
 use lumeryn_core::{Batch, Error, MediaTools, Project};
-use lumeryn_service::{Client, Event, Request, ToolConfig};
+use lumeryn_service::{Client, Event, ImportJob, ImportSource, Request, ToolConfig};
 use serde_json::Value;
 use std::{io::Write, path::PathBuf};
 use tokio::sync::mpsc;
@@ -20,6 +20,14 @@ pub enum Command {
         batch: Batch,
         revision: u64,
         label: String,
+    },
+    Import {
+        sources: Vec<ImportSource>,
+        revision: u64,
+        match_first_video: bool,
+    },
+    CancelImport {
+        job_id: Uuid,
     },
     Render {
         output: PathBuf,
@@ -54,6 +62,11 @@ pub enum Command {
 #[derive(Debug)]
 pub enum Message {
     Snapshot(Project),
+    Import(ImportJob),
+    ImportRejected {
+        media_ids: Vec<Uuid>,
+        message: String,
+    },
     Events(Vec<Event>),
     History {
         entries: Vec<Value>,
@@ -124,12 +137,14 @@ impl Backend {
                 let mut selected: Option<(PathBuf, Client, u64)> = None;
                 let mut watcher: Option<tokio::task::JoinHandle<()>> = None;
                 let mut renderer: Option<tokio::task::JoinHandle<()>> = None;
+                let mut imports: Vec<tokio::task::JoinHandle<()>> = Vec::new();
                 while let Some(command) = requests.recv().await {
                     let epoch = selected.as_ref().map_or(0, |(_, _, epoch)| *epoch);
                     match command {
                         Command::Shutdown => break,
                         Command::Open { path, epoch } => {
                             if let Some(watcher) = watcher.take() { watcher.abort(); }
+                            for task in imports.drain(..) { task.abort(); }
                             selected = None;
                             if !emit(&responses, &ctx, epoch, Message::Connection("Connecting to project service…".into())).await { break; }
                             match Client::connect(&path).await {
@@ -145,6 +160,9 @@ impl Backend {
                                             match watching.watch(sequence, 2000).await {
                                                 Ok(batch) => {
                                                     sequence = Some(batch.sequence);
+                                                    for job in batch.import_jobs {
+                                                        if !emit(&tx, &wake, epoch, Message::Import(job)).await { return; }
+                                                    }
                                                     if let Some(snapshot) = batch.snapshot
                                                         && (revision != Some((snapshot.revision,snapshot.schema_version)) || batch.resync)
                                                     {
@@ -220,6 +238,56 @@ impl Backend {
                                     let result = client.execute(batch, Some(revision), Some(format!("studio-{}", Uuid::new_v4())), false, tools.clone()).await;
                                     complete(&responses, &ctx, epoch, label, result).await;
                                 }
+                                Command::Import { sources, revision, match_first_video } => {
+                                    let media_ids = sources.iter().map(|source| source.media_id).collect();
+                                    let result = client.call(Request::Import {
+                                        sources, expected_revision: revision,
+                                        key: Some(format!("studio-import-{}", Uuid::new_v4())),
+                                        tools: tools.clone(), match_first_video,
+                                    }).await.and_then(|value| serde_json::from_value::<ImportJob>(value)
+                                        .map_err(|error| Error::Invalid(format!("Import response: {error}"))));
+                                    match result {
+                                        Ok(job) => {
+                                            let job_id = job.job_id;
+                                            let terminal = job.stage.is_terminal();
+                                            let source_ids = job.sources.iter().map(|source| source.media_id).collect::<Vec<_>>();
+                                            emit(&responses, &ctx, epoch, Message::Import(job)).await;
+                                            imports.retain(|task| !task.is_finished());
+                                            if !terminal {
+                                                let polling = client.clone();
+                                                let tx = responses.clone();
+                                                let wake = ctx.clone();
+                                                imports.push(tokio::spawn(async move {
+                                                    loop {
+                                                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                                                        match polling.import_status(job_id).await {
+                                                            Ok(job) => {
+                                                                let terminal = job.stage.is_terminal();
+                                                                if !emit(&tx, &wake, epoch, Message::Import(job)).await || terminal { break; }
+                                                            }
+                                                            Err(error) => {
+                                                                emit(&tx, &wake, epoch, Message::ImportRejected {
+                                                                    media_ids: source_ids.clone(), message: format!("Import status unavailable: {error}. Inspect the project before retrying."),
+                                                                }).await;
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }));
+                                            }
+                                        }
+                                        Err(error) => { emit(&responses, &ctx, epoch, Message::ImportRejected {
+                                            media_ids, message: error.to_string(),
+                                        }).await; }
+                                    }
+                                }
+                                Command::CancelImport { job_id } => {
+                                    if let Err(error) = client.call(Request::Cancel { job_id }).await {
+                                        emit(&responses, &ctx, epoch, Message::Error {
+                                            label: "Cancel import".into(), message: error.to_string(),
+                                        }).await;
+                                    }
+                                }
                                 Command::History => {
                                     match client.history().await.and_then(history_message) {
                                         Ok(message) => { emit(&responses, &ctx, epoch, message).await; }
@@ -265,6 +333,7 @@ impl Backend {
                 if let Some(watcher) = watcher { watcher.abort(); }
                 // A launched service job is service-owned and can continue after Studio closes.
                 if let Some(renderer) = renderer { renderer.abort(); }
+                for task in imports { task.abort(); }
             });
             runtime.shutdown_timeout(std::time::Duration::from_secs(2));
         });

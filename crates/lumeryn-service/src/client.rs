@@ -1,5 +1,5 @@
 use crate::{
-    EventBatch, PROTOCOL_VERSION, Request, ToolConfig,
+    EventBatch, ImportJob, PROTOCOL_VERSION, Request, ToolConfig,
     protocol::{Envelope, Response},
     read_frame, write_frame,
 };
@@ -156,6 +156,11 @@ impl Client {
     pub async fn history(&self) -> Result<Vec<Value>> {
         Ok(serde_json::from_value(self.call(Request::History).await?)?)
     }
+    pub async fn import_status(&self, job_id: Uuid) -> Result<ImportJob> {
+        Ok(serde_json::from_value(
+            self.call(Request::ImportStatus { job_id }).await?,
+        )?)
+    }
     pub async fn execute(
         &self,
         batch: Batch,
@@ -192,6 +197,13 @@ fn normalize_paths(request: &mut Request) -> Result<()> {
         Ok(())
     };
     match request {
+        Request::Import { sources, tools, .. } => {
+            for source in sources {
+                source.path = std::path::absolute(&source.path)?;
+            }
+            normalize_tool(&mut tools.ffmpeg)?;
+            normalize_tool(&mut tools.ffprobe)?;
+        }
         Request::Execute { batch, tools, .. } => {
             for operation in &mut batch.operations {
                 if let lumeryn_core::Edit::Import { path, .. } = operation {

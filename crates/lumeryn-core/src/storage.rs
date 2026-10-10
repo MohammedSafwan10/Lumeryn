@@ -308,6 +308,45 @@ impl Store {
         Ok(None)
     }
 
+    /// Replay an asynchronous import before source probing, including its original optional
+    /// first-video frame-rate match. Eligibility changes after that first commit.
+    pub async fn replay_import(
+        &mut self,
+        batch: &Batch,
+        key: Option<&str>,
+        match_first_video: bool,
+    ) -> Result<Option<Receipt>> {
+        let commands = validated_commands(batch, key)?;
+        if !batch.operations.len().is_multiple_of(2) || !batch.operations.chunks_exact(2).all(|pair| matches!(pair, [Edit::Import { id, .. }, Edit::RenameMedia { media_id, .. }] if id == media_id)) {
+            return Err(Error::Invalid("import replay requires import and alias commands".into()));
+        }
+        let Some(key) = key else { return Ok(None) };
+        let Some(row) =
+            sqlx::query("SELECT commands, revision, object_ids FROM receipts WHERE key=?")
+                .bind(key)
+                .fetch_optional(&mut self.connection)
+                .await?
+        else {
+            return Ok(None);
+        };
+        let stored: &str = row.try_get("commands")?;
+        if stored == commands {
+            return Ok(Some(receipt_from_row(row, &commands, false)?));
+        }
+        let stored_operations: Vec<Edit> = serde_json::from_str(stored)?;
+        if match_first_video
+            && matches!(stored_operations.last(), Some(Edit::SetFrameRate { .. }))
+            && stored_operations.len() == batch.operations.len() + 1
+            && serde_json::to_string(&stored_operations[..batch.operations.len()])? == commands
+        {
+            let stored_commands = stored.to_owned();
+            return Ok(Some(receipt_from_row(row, &stored_commands, false)?));
+        }
+        Err(Error::Invalid(
+            "idempotency key reused with different operations".into(),
+        ))
+    }
+
     pub async fn execute(
         &mut self,
         batch: &Batch,
@@ -455,7 +494,9 @@ impl Store {
                         right_clip_id,
                         ..
                     } => object_ids.extend([*clip_id, *right_clip_id]),
-                    Edit::SetCanvas { .. } => object_ids.push(project.id),
+                    Edit::SetCanvas { .. } | Edit::SetFrameRate { .. } => {
+                        object_ids.push(project.id)
+                    }
                     Edit::Undo {} | Edit::Redo {} => {
                         return Err(Error::Invalid(
                             "undo/redo must be the only batch operation".into(),
@@ -1014,6 +1055,79 @@ fn receipt_from_row(
 }
 
 /// Decode/probe imports without borrowing the authoritative Store. Commit validates the latest revision.
+/// Bind a source proved by the staged media worker to its exact project and commands.
+/// The private-construction wrapper prevents unverified metadata from entering this path.
+pub async fn prepare_verified_imports(
+    project_path: &Path,
+    batch: &Batch,
+    verified: Vec<crate::media::VerifiedMetadata>,
+) -> Result<PreparedImports> {
+    if verified.is_empty() || verified.len() > 32 {
+        return Err(Error::Invalid(
+            "verified import requires 1..32 source proofs".into(),
+        ));
+    }
+    let project_path = local_file(project_path)?;
+    let commands = validated_commands(batch, None)?;
+    let parent = project_path
+        .parent()
+        .ok_or_else(|| Error::Invalid("missing project parent".into()))?;
+    let mut imports = Vec::with_capacity(batch.operations.len());
+    let mut verified = verified.into_iter();
+    for operation in &batch.operations {
+        imports.push(match operation {
+            Edit::Import { id, path } => {
+                let canonical = local_file(path)?;
+                if canonical == project_path {
+                    return Err(Error::Invalid("cannot import the project database".into()));
+                }
+                let proof = verified
+                    .next()
+                    .ok_or_else(|| Error::Invalid("missing verified source".into()))?;
+                if proof.source_path() != canonical {
+                    return Err(Error::Invalid(
+                        "verified source does not match import path".into(),
+                    ));
+                }
+                let metadata = proof.into_metadata();
+                // Multi-source preparation can be long. Recheck every earlier source after all
+                // probes, outside the writer lock, rather than trusting its original mtime/size.
+                let digest = crate::media::content_hash(&canonical).await?;
+                if std::fs::metadata(&canonical)?.len() != metadata.size_bytes
+                    || metadata.blake3.as_deref() != Some(digest.as_str())
+                {
+                    return Err(Error::Invalid(
+                        "verified import source size or hash changed".into(),
+                    ));
+                }
+                Some(Media {
+                    id: *id,
+                    path: canonical
+                        .strip_prefix(parent)
+                        .map_or_else(|_| canonical.clone(), Path::to_path_buf),
+                    alias: None,
+                    metadata,
+                })
+            }
+            Edit::RenameMedia { .. } | Edit::SetFrameRate { .. } => None,
+            _ => {
+                return Err(Error::Invalid(
+                    "verified import accepts import, alias and frame-rate commands only".into(),
+                ));
+            }
+        });
+    }
+    if verified.next().is_some() {
+        return Err(Error::Invalid("unused verified sources".into()));
+    }
+    Ok(PreparedImports {
+        project_path,
+        commands,
+        audio_proofs: vec![None; imports.len()],
+        imports,
+    })
+}
+
 pub async fn prepare_imports(
     project_path: &Path,
     batch: &Batch,

@@ -35,7 +35,7 @@ try {
         cargo test -p lumeryn-core --lib --locked -j 4 -- --include-ignored
         if ($LASTEXITCODE -ne 0) { throw 'Core audio scheduling acceptance failed' }
         Wait-LumerynTestService
-        cargo test --locked --test workflow --test media_regressions --test live_service --test uhd_export --test history_workflow --test undo_redo --test media_management --test audio_probe --test audio_graph --test audio_migration --test audio_composition --test audio_workflow -j 4 -- --include-ignored
+        cargo test --locked --test workflow --test media_regressions --test live_service --test uhd_export --test history_workflow --test undo_redo --test media_management --test audio_probe --test audio_graph --test audio_migration --test audio_composition --test audio_workflow --test import_stages --test fps_workflow -j 4 -- --include-ignored
         if ($LASTEXITCODE -ne 0) { throw 'Media acceptance failed' }
         Wait-LumerynTestService
         cargo test -p lumeryn-preview -p lumeryn-service --locked -j 4 -- --include-ignored --test-threads=1

@@ -1,5 +1,7 @@
 # Native migration acceptance — 2026-10-09
 
+Latest focused import/FPS acceptance (2026-10-10): [NATIVE_IMPORT_FPS](NATIVE_IMPORT_FPS.md), with191distinct integrated tests, final23-check real-window staged audio import/export, inspected pending/FPS screens and measured import improvements. Historical baseline evidence below remains dated to its original execution.
+
 The working native baseline is verified on Windows x64. This is not full professional-editor parity or a claim that every production acceptance target has passed. Native computer interaction is unavailable to this session; the executed GUI harness runs the real window/render loop and dispatches the same command paths as controls. Manual pointer/high-DPI/device-loss and physical A/V checks remain unexecuted.
 
 ## Executed gates and artifacts

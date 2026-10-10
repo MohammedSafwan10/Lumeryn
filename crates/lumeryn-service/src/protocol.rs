@@ -10,7 +10,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const EVENT_CAPACITY: usize = 256;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ToolConfig {
     pub ffmpeg: PathBuf,
@@ -52,6 +52,17 @@ pub enum Request {
         project: Project,
     },
     Inspect,
+    Import {
+        sources: Vec<ImportSource>,
+        expected_revision: u64,
+        key: Option<String>,
+        tools: ToolConfig,
+        #[serde(default)]
+        match_first_video: bool,
+    },
+    ImportStatus {
+        job_id: Uuid,
+    },
     History,
     Execute {
         batch: Batch,
@@ -86,6 +97,77 @@ pub enum Request {
         after_sequence: Option<u64>,
         wait_ms: u32,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportStage {
+    Queued,
+    Inspecting,
+    Hashing,
+    Validating,
+    Committing,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl ImportStage {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportFailure {
+    pub code: String,
+    pub message: String,
+    pub conflict: Option<(u64, u64)>,
+}
+
+impl From<&Error> for ImportFailure {
+    fn from(error: &Error) -> Self {
+        Self {
+            code: error.code().into(),
+            message: error.to_string(),
+            conflict: match error {
+                Error::Conflict { expected, current } => Some((*expected, *current)),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// Quick metadata and the requested name are advisory until the completed receipt exists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportJob {
+    pub job_id: Uuid,
+    pub sources: Vec<ImportSourceStatus>,
+    pub current_source: Option<usize>,
+    pub stage: ImportStage,
+    pub revision: Option<u64>,
+    pub elapsed_ms: u64,
+    pub cache_hit: bool,
+    pub result: Option<Value>,
+    pub error: Option<ImportFailure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportSource {
+    pub path: PathBuf,
+    pub media_id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportSourceStatus {
+    pub media_id: Uuid,
+    pub name: String,
+    pub quick: Option<lumeryn_core::media::QuickMetadata>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,6 +212,8 @@ pub struct EventBatch {
     pub snapshot: Option<Project>,
     pub events: Vec<Event>,
     pub resync: bool,
+    #[serde(default)]
+    pub import_jobs: Vec<ImportJob>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

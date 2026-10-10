@@ -22,6 +22,19 @@ lumeryn project backup --project project.lumeryn --output backup.lumeryn
 
 Edit receipts contain revision and stable object IDs; inspect retrieves the committed state. In/out ranges are half-open integer source frames, clip positions are project frames, and compatible source/project CFR is required. The same core commands serve native Studio through the authoritative service. `project open` is headless validation, not a Studio launch.
 
+For responsive staged preparation, keep the project selected explicitly and inspect the revision first:
+
+```powershell
+lumeryn media import-start --project project.lumeryn --path source.mp4 --expected-revision 0 --match-first-video
+lumeryn media import-status --project project.lumeryn --job-id JOB_UUID
+# Cancel preparation; once committing begins, cancellation fails explicitly.
+lumeryn jobs cancel --project project.lumeryn --job-id JOB_UUID
+# Or choose an exact timeline rate before placing any video/audio clips.
+lumeryn timeline fps --project project.lumeryn --fps 60000/1001 --expected-revision 0 --dry-run
+```
+
+The returned job's quick headers are unverified. Wait for `completed`, inspect the committed revision and media, then place clips; terminal errors are in the status. A concurrent edit can cause a revision conflict; inspect before retrying. `--match-first-video` atomically adopts the first verified moving video's CFR only when no moving-video media or clips exist. Static PNG does not define timeline FPS. Import + match is one undo step. Different FPS edits are rejected after clips exist; source metadata is preserved. Timeline/media inspectors label source and timeline rates separately. Rendering with no FPS override retains the exact rational timeline rate; an override changes output cadence, not source motion. Synchronous `media import` is unchanged. For keyed background import retries, provide a stable `--id` as required by CLI help.
+
 Export defaults to the tested MPEG-4 Part2/AAC CPU preset at project resolution/rational FPS. Select actual local UHD without an account, watermark or subscription:
 
 ```powershell

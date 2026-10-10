@@ -18,6 +18,7 @@ pub enum CaptureState {
     Inspector,
     Audio,
     Project,
+    Importing,
     Tools,
     Empty,
     Library,

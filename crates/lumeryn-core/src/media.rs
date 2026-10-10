@@ -50,6 +50,71 @@ pub struct Audio {
     pub canonical_samples_48k: Option<u64>,
 }
 
+/// Advisory stream headers. These are never a source proof or editable media.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuickMetadata {
+    pub size_bytes: u64,
+    pub video: Option<QuickVideo>,
+    pub audio: Option<QuickAudio>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuickVideo {
+    pub codec: String,
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: Option<FrameRate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QuickAudio {
+    pub codec: String,
+    pub sample_rate: Option<u32>,
+    pub channels: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeStage {
+    Inspecting,
+    Hashing,
+    ValidatingVideo,
+    ValidatingAudio,
+    VerifyingSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeProgress {
+    pub stage: ProbeStage,
+    /// Cumulative time at stage entry; completion is the caller's terminal result.
+    pub elapsed_ms: u64,
+    pub quick: Option<QuickMetadata>,
+}
+
+/// A proof produced only by the media validator, never deserialized from a client.
+#[derive(Debug, Clone)]
+pub struct VerifiedMetadata {
+    metadata: Metadata,
+    source_path: PathBuf,
+}
+
+impl VerifiedMetadata {
+    pub fn source_path(&self) -> &Path {
+        &self.source_path
+    }
+    pub fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+
+    pub fn into_metadata(self) -> Metadata {
+        self.metadata
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MediaTools {
     pub ffmpeg: PathBuf,
@@ -375,9 +440,7 @@ impl MediaTools {
         Ok(capabilities)
     }
 
-    pub async fn probe(&self, path: &Path) -> Result<Metadata> {
-        let path = local_file(path)?;
-        let digest = content_hash(&path).await?;
+    async fn inspect_streams(&self, path: &Path) -> Result<Probe> {
         let args = [
             "-v",
             "error",
@@ -404,42 +467,84 @@ impl MediaTools {
                 "media stream count/dimensions exceed baseline limits".into(),
             ));
         }
+        Ok(probe)
+    }
+
+    /// Read headers only. Frame count, CFR and source identity remain unverified.
+    pub async fn inspect(&self, path: &Path) -> Result<QuickMetadata> {
+        let path = local_file(path)?;
+        let streams = self.inspect_streams(&path).await?;
+        quick_metadata(&path, &streams)
+    }
+
+    pub async fn probe(&self, path: &Path) -> Result<Metadata> {
+        Ok(self
+            .probe_with_progress(path, |_| {})
+            .await?
+            .into_metadata())
+    }
+
+    pub async fn probe_with_progress(
+        &self,
+        path: &Path,
+        progress: impl FnMut(ProbeProgress),
+    ) -> Result<VerifiedMetadata> {
+        self.probe_with_cached_progress(path, &[], progress).await
+    }
+
+    /// Reuse only metadata previously verified by this service and tool policy.
+    /// Every reuse still reads the complete source twice to prove its identity.
+    /// Dropping this future cancels its bounded kill-on-drop external worker.
+    pub async fn probe_with_cached_progress(
+        &self,
+        path: &Path,
+        cache: &[VerifiedMetadata],
+        mut progress: impl FnMut(ProbeProgress),
+    ) -> Result<VerifiedMetadata> {
+        let started = std::time::Instant::now();
+        let path = local_file(path)?;
+        emit_progress(&mut progress, ProbeStage::Inspecting, started, None);
+        let probe = self.inspect_streams(&path).await?;
+        let quick = quick_metadata(&path, &probe)?;
+        emit_progress(&mut progress, ProbeStage::Hashing, started, Some(&quick));
+        let digest = content_hash(&path).await?;
+        if let Some(cached) = cache.iter().find(|cached| {
+            cached.metadata.size_bytes == quick.size_bytes
+                && cached.metadata.blake3.as_deref() == Some(digest.as_str())
+        }) {
+            emit_progress(
+                &mut progress,
+                ProbeStage::VerifyingSource,
+                started,
+                Some(&quick),
+            );
+            if content_hash(&path).await? != digest {
+                return Err(Error::Invalid("media changed while probing".into()));
+            }
+            tracing::debug!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "verified import cache reused"
+            );
+            return Ok(VerifiedMetadata {
+                metadata: cached.metadata.clone(),
+                source_path: path,
+            });
+        }
+        // Quick headers precede the identity proof and cannot become authoritative.
+        // Re-read them inside the pre/post hash window to catch replacement races.
+        let probe = self.inspect_streams(&path).await?;
         let video = if let Some(s) = probe.streams.iter().find(|s| s.codec_type == "video") {
+            emit_progress(
+                &mut progress,
+                ProbeStage::ValidatingVideo,
+                started,
+                Some(&quick),
+            );
             let frame_rate = s
                 .avg_frame_rate
                 .as_deref()
                 .ok_or_else(|| Error::Media("missing frame rate".into()))?
                 .parse::<FrameRate>()?;
-            let count_args = [
-                "-v",
-                "error",
-                "-threads",
-                "2",
-                "-protocol_whitelist",
-                "file",
-                "-select_streams",
-                "v:0",
-                "-count_frames",
-                "-show_streams",
-                "-of",
-                "json",
-            ]
-            .into_iter()
-            .map(OsString::from)
-            .chain([path.as_os_str().to_owned()])
-            .collect::<Vec<_>>();
-            let counted: Probe =
-                serde_json::from_slice(&self.run(&self.ffprobe, &count_args).await?)?;
-            let counted = counted
-                .streams
-                .first()
-                .ok_or_else(|| Error::Media("video stream disappeared".into()))?;
-            let frames = counted
-                .nb_read_frames
-                .as_deref()
-                .ok_or_else(|| Error::Unsupported("cannot count video frames".into()))?
-                .parse::<u64>()
-                .map_err(|_| Error::Media("invalid frame count".into()))?;
             // Equal average and nominal rates are only a candidate; inspect every timestamp.
             let candidate = s
                 .r_frame_rate
@@ -451,10 +556,21 @@ impl MediaTools {
                 .time_base
                 .as_deref()
                 .ok_or_else(|| Error::Media("missing video timebase".into()))?;
-            let constant_rate = candidate
-                && self
-                    .constant_rate(&path, frame_rate, time_base, frames)
-                    .await?;
+            // The every-frame PTS pass already decodes and enumerates every frame.
+            // Count that same bounded output instead of decoding the source twice.
+            // Non-candidates retain the count-only path and are never marked CFR.
+            let (frames, constant_rate) = if candidate {
+                let timing = self.frame_timing(&path, frame_rate, time_base).await?;
+                if timing.0 == 0 {
+                    // Empty timestamp output cannot prove even an empty stream.
+                    // Retain the previous independent count/error behavior.
+                    (self.count_frames(&path).await?, false)
+                } else {
+                    timing
+                }
+            } else {
+                (self.count_frames(&path).await?, false)
+            };
             Some(Video {
                 codec: s.codec_name.clone().unwrap_or_default(),
                 width: s.width.unwrap_or(0),
@@ -496,29 +612,72 @@ impl MediaTools {
             && matches!(audio.channels, 1 | 2)
             && audio.start_time_micros == 0
         {
+            emit_progress(
+                &mut progress,
+                ProbeStage::ValidatingAudio,
+                started,
+                Some(&quick),
+            );
             audio.canonical_samples_48k = Some(self.canonical_audio_samples(&path, &digest).await?);
         }
         if video.is_none() && audio.is_none() {
             return Err(Error::Unsupported("no video or audio stream".into()));
         }
+        emit_progress(
+            &mut progress,
+            ProbeStage::VerifyingSource,
+            started,
+            Some(&quick),
+        );
         if content_hash(&path).await? != digest {
             return Err(Error::Invalid("media changed while probing".into()));
         }
-        Ok(Metadata {
-            size_bytes: std::fs::metadata(path)?.len(),
-            blake3: Some(digest),
-            video,
-            audio,
+        Ok(VerifiedMetadata {
+            source_path: path.clone(),
+            metadata: Metadata {
+                size_bytes: std::fs::metadata(path)?.len(),
+                blake3: Some(digest),
+                video,
+                audio,
+            },
         })
     }
 
-    async fn constant_rate(
+    async fn count_frames(&self, path: &Path) -> Result<u64> {
+        let args = [
+            "-v",
+            "error",
+            "-threads",
+            "2",
+            "-protocol_whitelist",
+            "file",
+            "-select_streams",
+            "v:0",
+            "-count_frames",
+            "-show_streams",
+            "-of",
+            "json",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .chain([path.as_os_str().to_owned()])
+        .collect::<Vec<_>>();
+        let counted: Probe = serde_json::from_slice(&self.run(&self.ffprobe, &args).await?)?;
+        counted
+            .streams
+            .first()
+            .and_then(|stream| stream.nb_read_frames.as_deref())
+            .ok_or_else(|| Error::Unsupported("cannot count video frames".into()))?
+            .parse()
+            .map_err(|_| Error::Media("invalid frame count".into()))
+    }
+
+    async fn frame_timing(
         &self,
         path: &Path,
         rate: FrameRate,
         time_base: &str,
-        expected_frames: u64,
-    ) -> Result<bool> {
+    ) -> Result<(u64, bool)> {
         let args = [
             "-v",
             "error",
@@ -553,8 +712,9 @@ impl MediaTools {
                     .map_err(|_| Error::Media("missing/invalid frame PTS".into()))
             })
             .collect::<Result<Vec<_>>>()?;
-        if timestamps.len() as u64 != expected_frames || timestamps.is_empty() {
-            return Ok(false);
+        let frames = timestamps.len() as u64;
+        if timestamps.is_empty() {
+            return Ok((frames, false));
         }
         let (numerator, denominator) = time_base
             .split_once('/')
@@ -574,15 +734,63 @@ impl MediaTools {
             || u64::from(numerator) * u64::from(rate.numerator())
                 >= u64::from(denominator) * u64::from(rate.denominator())
         {
-            return Ok(false);
+            return Ok((frames, false));
         }
-        Ok(timestamps.iter().enumerate().all(|(index, timestamp)| {
-            let observed =
-                (*timestamp - base) * i128::from(numerator) * i128::from(rate.numerator());
-            let ideal = index as i128 * i128::from(rate.denominator()) * i128::from(denominator);
-            (observed - ideal).abs() <= i128::from(numerator) * i128::from(rate.numerator())
-        }))
+        Ok((
+            frames,
+            timestamps.iter().enumerate().all(|(index, timestamp)| {
+                let observed =
+                    (*timestamp - base) * i128::from(numerator) * i128::from(rate.numerator());
+                let ideal =
+                    index as i128 * i128::from(rate.denominator()) * i128::from(denominator);
+                (observed - ideal).abs() <= i128::from(numerator) * i128::from(rate.numerator())
+            }),
+        ))
     }
+}
+
+fn emit_progress(
+    callback: &mut impl FnMut(ProbeProgress),
+    stage: ProbeStage,
+    started: std::time::Instant,
+    quick: Option<&QuickMetadata>,
+) {
+    callback(ProbeProgress {
+        stage,
+        elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        quick: quick.cloned(),
+    });
+}
+
+fn quick_metadata(path: &Path, probe: &Probe) -> Result<QuickMetadata> {
+    Ok(QuickMetadata {
+        size_bytes: std::fs::metadata(path)?.len(),
+        video: probe
+            .streams
+            .iter()
+            .find(|stream| stream.codec_type == "video")
+            .map(|stream| QuickVideo {
+                codec: stream.codec_name.clone().unwrap_or_default(),
+                width: stream.width.unwrap_or(0),
+                height: stream.height.unwrap_or(0),
+                frame_rate: stream
+                    .avg_frame_rate
+                    .as_deref()
+                    .and_then(|rate| rate.parse().ok()),
+            }),
+        audio: probe
+            .streams
+            .iter()
+            .find(|stream| stream.codec_type == "audio")
+            .map(|stream| QuickAudio {
+                codec: stream.codec_name.clone().unwrap_or_default(),
+                sample_rate: stream
+                    .sample_rate
+                    .as_deref()
+                    .and_then(|rate| rate.parse().ok()),
+                channels: stream.channels.unwrap_or(0),
+            }),
+    })
 }
 
 fn stream_start(stream: &Stream) -> Result<i64> {

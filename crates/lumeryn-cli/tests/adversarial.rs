@@ -330,7 +330,7 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
     let variants = schema["$defs"]["Edit"]["oneOf"]
         .as_array()
         .ok_or("missing operation variants")?;
-    assert_eq!(variants.len(), 20);
+    assert_eq!(variants.len(), 21);
     for example in [
         json!({"operation":"import","id":"00000000-0000-4000-8000-000000000001","path":"source.mp4"}),
         json!({"operation":"rename_media","media_id":"00000000-0000-4000-8000-000000000001","alias":"Opening shot"}),
@@ -349,6 +349,7 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
         json!({"operation":"delete_clip","clip_id":"00000000-0000-4000-8000-000000000002","ripple":true}),
         json!({"operation":"reorder_clip","clip_id":"00000000-0000-4000-8000-000000000002","before_clip_id":null}),
         json!({"operation":"set_canvas","width":2160,"height":3840}),
+        json!({"operation":"set_frame_rate","frame_rate":{"numerator":60000,"denominator":1001}}),
         json!({"operation":"undo"}),
         json!({"operation":"redo"}),
         json!({"operation":"paste_clip","id":"00000000-0000-4000-8000-000000000003","at_frame":30,"clipboard":{"version":1,"project_id":"00000000-0000-4000-8000-000000000004","media_id":"00000000-0000-4000-8000-000000000001","source_blake3":"a".repeat(64),"frame_rate":{"numerator":30,"denominator":1},"source_in_frame":10,"duration_frames":20}}),

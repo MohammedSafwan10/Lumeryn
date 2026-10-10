@@ -3,7 +3,7 @@ use lumeryn_core::render::{
     Acceleration, RenderOptions, RenderQuality, RenderResolution, VideoCodec,
 };
 use lumeryn_core::{Batch, Edit, Error, MediaTools, Project, Result, time::FrameRate};
-use lumeryn_service::{Client, Request, ToolConfig};
+use lumeryn_service::{Client, ImportSource, Request, ToolConfig};
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 use tracing::Instrument;
@@ -41,7 +41,7 @@ enum Command {
     /// Run the local authoritative project service (normally launched automatically).
     #[command(subcommand)]
     Service(ServiceCommand),
-    /// Control a known background render job.
+    /// Control a known background render or import job.
     #[command(subcommand)]
     Jobs(JobCommand),
     /// JSON Schema generated from shared batch, render or clipboard types.
@@ -271,6 +271,30 @@ enum MediaCommand {
         #[arg(long)]
         id: Option<Uuid>,
     },
+    /// Start background verified import; inspect readiness with import-status.
+    ImportStart {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        path: PathBuf,
+        #[arg(long)]
+        expected_revision: u64,
+        /// Supply a stable media ID for idempotent retries.
+        #[arg(long)]
+        id: Option<Uuid>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+        /// Match verified first-video FPS only before moving-video media or clips exist.
+        #[arg(long)]
+        match_first_video: bool,
+    },
+    /// Inspect background import stage, detected metadata, receipt or explicit error.
+    ImportStatus {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        job_id: Uuid,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -310,6 +334,15 @@ enum AssetCommand {
 
 #[derive(Debug, Subcommand)]
 enum TimelineCommand {
+    /// Choose the exact timeline FPS before placing clips; accepts 60 or 60000/1001.
+    Fps {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        fps: FrameRate,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Independent audio clips, evaluated identically by native preview and final export.
     #[command(subcommand)]
     Audio(AudioCommand),
@@ -625,6 +658,7 @@ fn media_view(media: &lumeryn_core::model::Media, usage_count: usize) -> Result<
     value["alias"] = json!(media.alias);
     value["display_name"] = json!(media.display_name());
     value["usage_count"] = json!(usage_count);
+    value["source_frame_rate"] = json!(media.metadata.video.as_ref().map(|video| video.frame_rate));
     Ok(value)
 }
 
@@ -676,17 +710,19 @@ async fn execute(cli: Cli) -> Result<Value> {
         }
         Command::Capabilities => Ok(json!({
             "api_version":1,"project_schema_version":lumeryn_core::model::SCHEMA_VERSION,"output":"json",
-            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","media.list","media.inspect","media.rename","media.remove","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.insert","timeline.audio.add","timeline.audio.move","timeline.audio.trim","timeline.audio.range","timeline.audio.properties","timeline.audio.delete","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
+            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","media.import_start","media.import_status","media.list","media.inspect","media.rename","media.remove","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.fps","timeline.canvas","timeline.clip.add","timeline.clip.insert","timeline.audio.add","timeline.audio.move","timeline.audio.trim","timeline.audio.range","timeline.audio.properties","timeline.audio.delete","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
+            "timeline_frame_rate":{"command":"timeline fps --project <path> --fps <numerator/denominator> --expected-revision <revision>","representation":"exact rational; no rounding of 30000/1001 or 60000/1001","change_policy":"different rate only while no video or audio clips are placed","source_rate":"media metadata.video.frame_rate detected and verified independently","export_rate":"render --fps override or preserve timeline rate","mixed_source_rates":"unsupported"},
             "media_management":{"alias":"project-only; null resets source filename display","alias_maximum_utf8_bytes":256,"remove":"unused project references only; rejects referenced media; source bytes unchanged","undo_redo":true,"dry_run":true},
             "history":{"undo_redo":"new monotonic revisions; logical history restored transactionally","undo_redo_batch":"sole operation only","branch_edit_clears_redo":true},
             "clipboard":{"version":1,"maximum_payload_bytes":16384,"scope":"same project and already-imported BLAKE3 source identity","payload":"result.clipboard object","cross_project_transfer":"staged","paste":"authoritative typed PasteClip with new stable ID and exact source ranges"},
-            "requires_external_tools":["media.probe","media.import","render"],
+            "requires_external_tools":["media.probe","media.import","media.import_start","render"],
             "export_limits":{"track":"one video track","layout":"1..64 contiguous nonoverlapping clips starting at frame 0","source":"matching CFR; frame timestamps verified","audio":"embedded audio plus independent mono/stereo zero-origin sources; canonical stereo 48000Hz; max64 contributions","color":"baseline SDR; no managed HDR"},
             "export_options":{"resolution":["project","hd720","fhd1080","uhd2160"],"uhd_landscape":[3840,2160],"uhd_portrait":[2160,3840],"fps":[24,25,30,60],"preserve_project_fps":true,"codecs":["mpeg4","h264","h265"],"codec_availability":"installed encoder and actual requested-size initialization","quality":["draft","balanced","high"],"bitrate_kbps_range":[100,200000],"acceleration":["cpu","auto"],"watermark":false,"subscription_required":false,"preview_settings_affect_final":false,"eight_k_hdr_mastering":"staged"},
             "requirements":{"ordinary_editing":{"gpu_required":false,"cloud_required":false,"models_required":false,"database":"per-project SQLite3.51.3","schema_version":lumeryn_core::model::SCHEMA_VERSION,"storage_version":1},
                 "baseline_render":{"runtime":["trusted user-installed ffmpeg","trusted user-installed ffprobe"],"codec":"native mpeg4+aac; no hardware encoder selected","decoder_threads_per_input":2,"maximum_clips":64,"measured_peak_ram_bytes":null,"vram_bytes":null,"cpu_fallback":"the implemented baseline"}},
             "capability_status":{"studio":"native_baseline_prototype","preview":"cpu_decode_gpu_upload_prototype","gpu_encode_decode":"auto_encoding_probe_available_decode_not_integrated","native_text":"planned","device_audio":"cpal_prototype_physical_sync_unmeasured","semantic_vectors":"not_selected","application_database":"planned","fts5":"implemented_metadata_only","cache":"source_content_hashes_only","live_events":"implemented_bounded_replay_snapshot_resync"},
             "components":{"project_service":{"platform":"Windows","transport":"current-user ACL named pipe; remote clients rejected","supported_here":cfg!(windows),"cloud_required":false},"studio":{"executable":"lumeryn-studio","separate_install":true,"stack":"egui/eframe/egui_dock/egui-wgpu/wgpu","preview_gpu_required":true,"hardware_zero_copy":false,"physical_av_sync_verified":false}},
+            "import_options":{"background_start":"media import-start","status":"media import-status","match_first_video":"opt-in; verified CFR only; no existing moving-video media or placed clips","pending_media_editable":false,"expected_revision_required":true,"cancel_command":"jobs cancel","synchronous_import_preserved":true},
             "job_control":{"render_accepts_job_id":true,"client_disconnect_cancels_render":false,"cancel_command":"jobs cancel --project <path> --job-id <uuid>","render_concurrency":1,"render_queue_limit":16},
             "planned":["gpu_compositor","hardware_decode_integration","resource_scheduler","models","blender","effects","audio_detach_fades_multitrack","transcript_fts5","native_typography","professional_audio_mixing","proxies","incremental_render_cache","vector_index"]
         })),
@@ -887,8 +923,61 @@ async fn execute(cli: Cli) -> Result<Value> {
                 )
                 .await
             }
+            MediaCommand::ImportStart {
+                project,
+                path,
+                expected_revision,
+                id,
+                idempotency_key,
+                match_first_video,
+            } => {
+                let write = Write {
+                    project,
+                    expected_revision: Some(expected_revision),
+                    idempotency_key,
+                };
+                let media_id = operation_id(id, &write)?;
+                let name = path.file_name().map_or_else(
+                    || "Media".into(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                let path = std::path::absolute(path)?;
+                project_call(
+                    write.project,
+                    Request::Import {
+                        sources: vec![ImportSource {
+                            path,
+                            media_id,
+                            name,
+                        }],
+                        expected_revision,
+                        key: write.idempotency_key,
+                        tools: tool_config(&tools),
+                        match_first_video,
+                    },
+                )
+                .await
+            }
+            MediaCommand::ImportStatus { project, job_id } => {
+                project_call(project, Request::ImportStatus { job_id }).await
+            }
         },
         Command::Timeline(command) => match command {
+            TimelineCommand::Fps {
+                write,
+                fps,
+                dry_run,
+            } => {
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::SetFrameRate { frame_rate: fps }],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
             TimelineCommand::Audio(command) => {
                 let (write, operation) = match command {
                     AudioCommand::Add {
@@ -1112,7 +1201,7 @@ async fn execute(cli: Cli) -> Result<Value> {
             TimelineCommand::Inspect { project } => {
                 let project = Client::connect(project).await?.inspect().await?;
                 Ok(
-                    json!({"revision":project.revision,"frame_rate":project.frame_rate,"video_track_id":project.video_track_id,"clips":project.clips,"audio_track_id":project.audio_track_id,"audio_clips":project.audio_clips}),
+                    json!({"revision":project.revision,"frame_rate":project.frame_rate,"timeline_frame_rate":project.frame_rate,"frame_rate_locked":!project.clips.is_empty() || !project.audio_clips.is_empty(),"video_track_id":project.video_track_id,"clips":project.clips,"audio_track_id":project.audio_track_id,"audio_clips":project.audio_clips}),
                 )
             }
             TimelineCommand::Clip(ClipCommand::Insert {

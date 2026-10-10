@@ -99,7 +99,7 @@ struct HistoryStep {
 
 fn audio_label(step: u8) -> &'static str {
     match step {
-        0 => "Import audio fixture",
+        0 => "Import media",
         1 | 3 => "Drag audio",
         2 => "Trim audio",
         4 => "Apply audio",
@@ -699,13 +699,17 @@ impl Smoke {
                                 return;
                             }
                         };
-                        session.edit(
-                            lumeryn_core::Edit::Import {
-                                id: self.audio_media,
-                                path: self.directory.join("voiceover.wav"),
-                            },
-                            audio_label(step),
-                        )
+                        let submitted =
+                            session.import_media(vec![self.directory.join("voiceover.wav")]);
+                        if submitted {
+                            let evidence = session.import_evidence();
+                            if evidence["editing_busy"] != false || evidence["pending_cards"] != 1 {
+                                self.finish(session, false, Some("Staged import did not immediately create an editable pending state".into()));
+                                return;
+                            }
+                            self.check("native_staged_import_started", evidence);
+                        }
+                        submitted
                     }
                     1 => {
                         let Some(payload) =
@@ -791,6 +795,25 @@ impl Smoke {
                     })
                 {
                     return;
+                }
+                if step == 0 {
+                    let Some(media) = project.media.iter().find(|media| {
+                        media
+                            .path
+                            .file_name()
+                            .is_some_and(|name| name == "voiceover.wav")
+                    }) else {
+                        self.finish(
+                            session,
+                            false,
+                            Some(
+                                "Staged imported fixture is missing from the committed snapshot"
+                                    .into(),
+                            ),
+                        );
+                        return;
+                    };
+                    self.audio_media = media.id;
                 }
                 let half = self.audio_visual_frames / 2;
                 let media = project

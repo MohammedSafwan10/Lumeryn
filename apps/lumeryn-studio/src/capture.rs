@@ -71,6 +71,7 @@ impl Capture {
             "asset_evidence": session.asset_evidence(),
             "asset_capture_wait_expired": self.asset_wait_expired,
             "session_error": session.error,
+            "import_state": session.import_evidence(),
             "limitations": [
                 "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
                 "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",

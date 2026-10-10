@@ -172,6 +172,10 @@ pub enum Edit {
         width: u32,
         height: u32,
     },
+    /// Choose an exact timeline rate before placing any video or audio clips.
+    SetFrameRate {
+        frame_rate: FrameRate,
+    },
     PasteClip {
         id: Uuid,
         at_frame: u64,
@@ -650,6 +654,16 @@ impl Project {
             Edit::SetCanvas { width, height } => {
                 self.width = *width;
                 self.height = *height;
+            }
+            Edit::SetFrameRate { frame_rate } => {
+                if self.frame_rate != *frame_rate
+                    && (!self.clips.is_empty() || !self.audio_clips.is_empty())
+                {
+                    return Err(Error::Unsupported(
+                        "timeline frame rate is locked while video or audio clips are placed; choose it before editing".into(),
+                    ));
+                }
+                self.frame_rate = *frame_rate;
             }
             Edit::PasteClip {
                 id,

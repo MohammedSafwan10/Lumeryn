@@ -15,7 +15,7 @@ use lumeryn_core::render::{
 };
 use lumeryn_core::{Batch, Edit, MediaTools, Project};
 use lumeryn_preview::{PreviewConfig, PreviewPlayer};
-use lumeryn_service::ToolConfig;
+use lumeryn_service::{ImportJob, ImportSource, ImportStage, ToolConfig};
 use serde_json::Value;
 use std::{
     collections::VecDeque,
@@ -214,6 +214,16 @@ struct MediaRename {
     text: String,
 }
 
+struct ImportCard {
+    media_id: Uuid,
+    name: String,
+    job_id: Option<Uuid>,
+    stage: ImportStage,
+    error: Option<String>,
+    elapsed_ms: u64,
+    quick: Option<lumeryn_core::media::QuickMetadata>,
+}
+
 pub struct Session {
     backend: Backend,
     pub project: Option<Project>,
@@ -262,6 +272,10 @@ pub struct Session {
     library: crate::library::Library,
     picker: Option<std::sync::mpsc::Receiver<Picked>>,
     pending_import: Option<(u64, PathBuf)>,
+    imports: Vec<ImportCard>,
+    import_paths: Vec<PathBuf>,
+    completed_imports: VecDeque<Uuid>,
+    match_first_video: bool,
     selected_media: Option<Uuid>,
     media_rename: Option<MediaRename>,
     recent_media: bool,
@@ -374,6 +388,10 @@ impl Session {
             ),
             picker: None,
             pending_import: None,
+            imports: Vec::new(),
+            import_paths: Vec::new(),
+            completed_imports: VecDeque::new(),
+            match_first_video: true,
             selected_media: None,
             media_rename: None,
             recent_media: false,
@@ -414,6 +432,10 @@ impl Session {
         }
         self.epoch += 1;
         self.pending_import = None;
+        self.imports.clear();
+        self.import_paths.clear();
+        self.completed_imports.clear();
+        self.match_first_video = true;
         self.project = None;
         self.last_frame = None;
         self.frame_wait_until = Some(Instant::now() + Duration::from_secs(30));
@@ -515,13 +537,7 @@ impl Session {
             && let Some((epoch, path)) = self.pending_import.take()
             && epoch == self.epoch
         {
-            self.edit(
-                Edit::Import {
-                    id: Uuid::new_v4(),
-                    path,
-                },
-                "Import media",
-            );
+            self.import_media(vec![path]);
         }
         if let Some(assets) = &mut self.assets {
             assets.poll(ctx);
@@ -539,6 +555,12 @@ impl Session {
             }
             match envelope.message {
                 Message::Snapshot(project) => {
+                    if self.project.is_none() {
+                        self.match_first_video = project.revision == 0;
+                    }
+                    self.imports.retain(|card| {
+                        !project.media.iter().any(|media| media.id == card.media_id)
+                    });
                     let changed = self.project.as_ref().is_none_or(|p| {
                         p.revision != project.revision || p.schema_version != project.schema_version
                     });
@@ -618,6 +640,11 @@ impl Session {
                 }
                 Message::Events(events) => {
                     for event in events {
+                        if event.kind.starts_with("import_")
+                            && let Ok(job) = serde_json::from_value::<ImportJob>(event.data.clone())
+                        {
+                            self.update_import(job);
+                        }
                         if (event.kind == "job_completed"
                             || event.kind == "job_failed"
                             || event.kind == "job_cancelled")
@@ -640,6 +667,16 @@ impl Session {
                     self.history = entries;
                     self.history_state = Some(state);
                 }
+                Message::Import(job) => self.update_import(job),
+                Message::ImportRejected { media_ids, message } => {
+                    for card in &mut self.imports {
+                        if media_ids.contains(&card.media_id) {
+                            card.stage = ImportStage::Failed;
+                            card.error = Some(message.clone());
+                        }
+                    }
+                    self.fail(format!("Import: {message}"));
+                }
                 Message::Complete { label, value } => {
                     if label == "Export" {
                         self.last_render = Some(value.clone());
@@ -653,7 +690,7 @@ impl Session {
                     self.note(format!("{label}: {value}"));
                     if label == "Export" {
                         self.render_busy = false;
-                    } else {
+                    } else if label != "Cancel import" {
                         self.edit_busy = false;
                     }
                     self.last_complete = Some(label);
@@ -666,7 +703,9 @@ impl Session {
                     if label == "Export" {
                         self.render_busy = false;
                     }
-                    self.edit_busy = false;
+                    if !matches!(label.as_str(), "Cancel import" | "Import status") {
+                        self.edit_busy = false;
+                    }
                     self.fail(format!("{label}: {message}"));
                 }
                 Message::Artifact(path) => self.artifacts.push(path),
@@ -704,6 +743,122 @@ impl Session {
                 ctx.request_repaint_after(Duration::from_millis(8));
             }
         }
+    }
+
+    pub(crate) fn import_media(&mut self, paths: Vec<PathBuf>) -> bool {
+        let Some(project) = &self.project else {
+            self.fail("Open a project before importing media.".into());
+            return false;
+        };
+        if !self.connected || self.edit_busy || paths.is_empty() || paths.len() > 32 {
+            self.fail("Wait for the current edit, then import up to 32 files together.".into());
+            return false;
+        }
+        if self.imports.iter().any(|card| !card.stage.is_terminal()) {
+            self.fail("An import is preparing. You can continue editing, or cancel it before importing more files.".into());
+            return false;
+        }
+        let revision = project.revision;
+        self.import_paths = paths.clone();
+        let match_first_video = self.match_first_video
+            && project.clips.is_empty()
+            && project.audio_clips.is_empty()
+            && !project.media.iter().any(|media| {
+                media
+                    .metadata
+                    .video
+                    .as_ref()
+                    .is_some_and(|video| video.codec != "png")
+            });
+        let sources: Vec<_> = paths
+            .into_iter()
+            .map(|path| {
+                let name = path.file_stem().map_or_else(
+                    || "Media".into(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                ImportSource {
+                    media_id: Uuid::new_v4(),
+                    path,
+                    name,
+                }
+            })
+            .collect();
+        self.imports.retain(|card| !card.stage.is_terminal());
+        self.imports.extend(sources.iter().map(|source| ImportCard {
+            media_id: source.media_id,
+            name: source.name.clone(),
+            job_id: None,
+            stage: ImportStage::Queued,
+            error: None,
+            elapsed_ms: 0,
+            quick: None,
+        }));
+        if !self.send(Command::Import {
+            sources,
+            revision,
+            match_first_video,
+        }) {
+            self.imports.clear();
+            return false;
+        }
+        true
+    }
+
+    fn update_import(&mut self, job: ImportJob) {
+        for source in &job.sources {
+            // A completed job can precede or follow its authoritative snapshot.
+            if self.project.as_ref().is_some_and(|project| {
+                project
+                    .media
+                    .iter()
+                    .any(|media| media.id == source.media_id)
+            }) {
+                continue;
+            }
+            if let Some(card) = self
+                .imports
+                .iter_mut()
+                .find(|card| card.media_id == source.media_id)
+            {
+                if job.elapsed_ms < card.elapsed_ms
+                    || card.stage.is_terminal() && !job.stage.is_terminal()
+                {
+                    continue;
+                }
+                card.job_id = Some(job.job_id);
+                card.stage = job.stage;
+                card.error = job.error.as_ref().map(|error| error.message.clone());
+                card.elapsed_ms = job.elapsed_ms;
+                card.quick = source.quick.clone();
+            } else if !job.stage.is_terminal() && self.imports.len() < 128 {
+                self.imports.push(ImportCard {
+                    media_id: source.media_id,
+                    name: source.name.clone(),
+                    job_id: Some(job.job_id),
+                    stage: job.stage,
+                    error: job.error.as_ref().map(|error| error.message.clone()),
+                    elapsed_ms: job.elapsed_ms,
+                    quick: source.quick.clone(),
+                });
+            }
+        }
+        if job.stage == ImportStage::Completed && !self.completed_imports.contains(&job.job_id) {
+            if self.completed_imports.len() >= 32 {
+                self.completed_imports.pop_front();
+            }
+            self.completed_imports.push_back(job.job_id);
+            self.last_complete = Some("Import media".into());
+        }
+    }
+
+    pub(crate) fn import_evidence(&self) -> Value {
+        serde_json::json!({
+            "pending_cards": self.imports.iter().filter(|card| !card.stage.is_terminal()).count(),
+            "editing_busy": self.edit_busy,
+            "timeline_frame_rate": self.project.as_ref().map(|project| project.frame_rate),
+            "stages": self.imports.iter().map(|card| card.stage).collect::<Vec<_>>(),
+        })
     }
 
     pub(crate) fn select(&mut self, id: Uuid) {
@@ -1088,6 +1243,102 @@ impl Session {
             self.pick(ui.ctx(), Picker::Import);
         }
         ui.add_space(10.0);
+        let mut cancel_import = None;
+        let mut dismiss_import = None;
+        if !self.imports.is_empty() {
+            egui::ScrollArea::vertical()
+                .id_salt("pending-imports")
+                .max_height((ui.available_height() * 0.4).clamp(100.0, 260.0))
+                .show(ui, |ui| {
+                    for card in &self.imports {
+                        egui::Frame::new()
+                            .fill(design::BACKGROUND)
+                            .inner_margin(10.0)
+                            .corner_radius(5.0)
+                            .show(ui, |ui| {
+                                ui.set_width((ui.available_width() - 20.0).max(80.0));
+                                ui.add(
+                                    egui::Label::new(RichText::new(&card.name).strong()).truncate(),
+                                )
+                                .on_hover_text(&card.name);
+                                ui.horizontal(|ui| {
+                                    if !card.stage.is_terminal() {
+                                        ui.spinner();
+                                    }
+                                    ui.label(
+                                        RichText::new(import_stage_label(card.stage))
+                                            .small()
+                                            .color(design::MUTED),
+                                    );
+                                });
+                                if let Some(video) =
+                                    card.quick.as_ref().and_then(|quick| quick.video.as_ref())
+                                {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} × {} · {} · unverified",
+                                            video.width,
+                                            video.height,
+                                            video
+                                                .frame_rate
+                                                .map_or_else(|| "FPS pending".into(), rate_label)
+                                        ))
+                                        .small()
+                                        .color(design::MUTED),
+                                    );
+                                }
+                                if let Some(error) = &card.error {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(error).small().color(design::MUTED),
+                                        )
+                                        .wrap(),
+                                    );
+                                }
+                                if matches!(
+                                    card.stage,
+                                    ImportStage::Queued
+                                        | ImportStage::Inspecting
+                                        | ImportStage::Hashing
+                                        | ImportStage::Validating
+                                ) && let Some(job_id) = card.job_id
+                                    && ui.small_button("Cancel import").clicked()
+                                {
+                                    cancel_import = Some(job_id);
+                                }
+                                if matches!(
+                                    card.stage,
+                                    ImportStage::Failed | ImportStage::Cancelled
+                                ) && ui.small_button("Dismiss").clicked()
+                                {
+                                    dismiss_import = Some(card.media_id);
+                                }
+                            });
+                        ui.add_space(6.0);
+                    }
+                });
+        }
+        if let Some(job_id) = cancel_import {
+            self.send(Command::CancelImport { job_id });
+        }
+        if let Some(media_id) = dismiss_import {
+            self.imports.retain(|card| card.media_id != media_id);
+        }
+        if !self.import_paths.is_empty()
+            && self
+                .imports
+                .iter()
+                .any(|card| card.stage == ImportStage::Failed)
+            && self.imports.iter().all(|card| card.stage.is_terminal())
+            && ui
+                .add_enabled(
+                    self.connected && !self.edit_busy,
+                    egui::Button::new("Retry import"),
+                )
+                .clicked()
+        {
+            self.import_media(self.import_paths.clone());
+        }
         let Some(project) = &self.project else {
             ui.label(RichText::new("Your media belongs here").strong());
             ui.label(
@@ -1323,7 +1574,7 @@ impl Session {
                     });
                     ui.add_space(8.0);
                 }
-                if project.media.is_empty() {
+                if project.media.is_empty() && self.imports.is_empty() {
                     ui.label(RichText::new("No media yet").strong());
                     ui.label(
                         RichText::new("Import a video to start. Your source files stay unchanged.")
@@ -1331,6 +1582,22 @@ impl Session {
                     );
                 }
             });
+        if let Some(video) = project
+            .media
+            .iter()
+            .find(|media| Some(media.id) == self.selected_media)
+            .and_then(|media| media.metadata.video.as_ref())
+        {
+            ui.label(
+                RichText::new(format!(
+                    "Source {} · timeline {}",
+                    rate_label(video.frame_rate),
+                    rate_label(project.frame_rate)
+                ))
+                .small()
+                .color(design::MUTED),
+            );
+        }
         if let Some(media) = project
             .media
             .iter()
@@ -1799,8 +2066,11 @@ impl Session {
                 && let Some(video) = &media.metadata.video
             {
                 ui.label(format!(
-                    "{} x {} - {} fps",
-                    video.width, video.height, video.frame_rate
+                    "{} × {} · Source {} · Timeline {}",
+                    video.width,
+                    video.height,
+                    rate_label(video.frame_rate),
+                    rate_label(project.frame_rate)
                 ));
             }
         });
@@ -2208,13 +2478,7 @@ impl Session {
             )
             .clicked()
         {
-            self.edit(
-                Edit::Import {
-                    id: Uuid::new_v4(),
-                    path: self.media_input.trim().into(),
-                },
-                "Import media",
-            );
+            self.import_media(vec![self.media_input.trim().into()]);
         }
     }
     fn project_panel(&mut self, ui: &mut egui::Ui) {
@@ -2266,14 +2530,55 @@ impl Session {
                 });
         });
         ui.add_space(12.0);
+        let current_rate = project.frame_rate;
+        let mut selected_rate = current_rate;
+        let rate_locked = !project.clips.is_empty() || !project.audio_clips.is_empty();
+        let first_video_eligible = !rate_locked
+            && !project.media.iter().any(|media| {
+                media
+                    .metadata
+                    .video
+                    .as_ref()
+                    .is_some_and(|video| video.codec != "png")
+            });
+        ui.label(RichText::new("Timeline FPS").small().color(design::MUTED));
+        ui.add_enabled_ui(self.connected && !self.edit_busy && !rate_locked, |ui| {
+            egui::ComboBox::from_id_salt("project-fps")
+                .width(ui.available_width())
+                .selected_text(rate_label(selected_rate))
+                .show_ui(ui, |ui| {
+                    for (numerator, denominator) in [
+                        (24000, 1001),
+                        (24, 1),
+                        (25, 1),
+                        (30000, 1001),
+                        (30, 1),
+                        (50, 1),
+                        (60000, 1001),
+                        (60, 1),
+                    ] {
+                        if let Ok(rate) = lumeryn_core::time::FrameRate::new(numerator, denominator)
+                        {
+                            ui.selectable_value(&mut selected_rate, rate, rate_label(rate));
+                        }
+                    }
+                });
+        });
+        if rate_locked {
+            ui.label(
+                RichText::new("Locked while clips are on the timeline.")
+                    .small()
+                    .color(design::MUTED),
+            );
+        } else if first_video_eligible {
+            ui.checkbox(&mut self.match_first_video, "Match first video").on_hover_text("Use the first verified video's exact FPS. Once clips are added, the timeline rate stays fixed.");
+        }
+        ui.add_space(12.0);
         egui::Grid::new("project-overview")
             .spacing(Vec2::new(14.0, 12.0))
             .show(ui, |ui| {
                 ui.label(RichText::new("Size").color(design::MUTED));
                 ui.label(format!("{} × {}", project.width, project.height));
-                ui.end_row();
-                ui.label(RichText::new("Frame rate").color(design::MUTED));
-                ui.label(rate_label(project.frame_rate));
                 ui.end_row();
                 ui.label(RichText::new("Duration").color(design::MUTED));
                 ui.label(timecode(
@@ -2303,6 +2608,14 @@ impl Session {
                     height: choice.1,
                 },
                 "Change canvas",
+            );
+        } else if selected_rate != current_rate {
+            self.match_first_video = false;
+            self.edit(
+                Edit::SetFrameRate {
+                    frame_rate: selected_rate,
+                },
+                "Change timeline FPS",
             );
         }
     }
@@ -2349,7 +2662,7 @@ impl Session {
                         let ui = &mut columns[1];
                         ui.label(RichText::new("Video settings").strong());
                         ui.add_space(8.0);
-                        ui.label(RichText::new("Frame rate").small().color(design::MUTED));
+                        ui.label(RichText::new("Export FPS").small().color(design::MUTED));
                         egui::ComboBox::from_id_salt("export-fps")
                             .width(ui.available_width())
                             .selected_text(self.render_options.fps.map_or_else(
@@ -2709,6 +3022,18 @@ fn rate_label(rate: lumeryn_core::time::FrameRate) -> String {
         )
     }
 }
+fn import_stage_label(stage: ImportStage) -> &'static str {
+    match stage {
+        ImportStage::Queued => "Importing…",
+        ImportStage::Inspecting => "Reading media…",
+        ImportStage::Hashing => "Checking source…",
+        ImportStage::Validating => "Verifying timing…",
+        ImportStage::Committing => "Adding to project…",
+        ImportStage::Completed => "Verified · updating library…",
+        ImportStage::Failed => "Import failed",
+        ImportStage::Cancelled => "Import cancelled",
+    }
+}
 fn codec_label(codec: VideoCodec) -> &'static str {
     match codec {
         VideoCodec::H264 => "H.264",
@@ -2944,7 +3269,7 @@ impl Studio {
             ui.add_enabled_ui(self.session.connected && !self.session.edit_busy && self.session.history_state.as_ref().is_some_and(|state| state.can_redo), |ui| {
                 if design::icon_button(ui,design::Icon::Redo,"Redo (Ctrl+Y or Ctrl+Shift+Z)").clicked() { self.session.redo(); }
             });
-            if self.session.edit_busy {
+            if self.session.edit_busy || self.session.imports.iter().any(|card| card.stage == ImportStage::Committing) {
                 ui.spinner();
                 ui.label(RichText::new("Saving…").small().color(design::MUTED));
             } else if self.session.connected {
@@ -3245,21 +3570,7 @@ impl eframe::App for Studio {
                 self.session
                     .fail("Drop one project at a time. Open it before importing media.".into());
             } else {
-                let batch = Batch {
-                    operations: paths
-                        .into_iter()
-                        .map(|path| Edit::Import {
-                            id: Uuid::new_v4(),
-                            path,
-                        })
-                        .collect(),
-                };
-                if !self.session.edit_batch(batch, "Import media") {
-                    self.session.fail(
-                        "Open a project and wait for the current edit before importing files."
-                            .into(),
-                    );
-                }
+                self.session.import_media(paths);
             }
         }
         if self.session.media_rename.is_some()
@@ -3467,7 +3778,21 @@ impl eframe::App for Studio {
                 });
         }
         if self.capture.is_some() {
-            let ready = if self.capture_state == CaptureState::Empty {
+            let ready = if self.capture_state == CaptureState::Importing {
+                self.session.connected
+                    && self
+                        .session
+                        .imports
+                        .iter()
+                        .any(|card| !card.stage.is_terminal())
+            } else if self.capture_state == CaptureState::Empty
+                || self.capture_state == CaptureState::Project
+                    && self
+                        .session
+                        .project
+                        .as_ref()
+                        .is_some_and(|project| project.clips.is_empty())
+            {
                 if self.session.project_input.is_empty() {
                     self.session.project.is_none()
                 } else {

@@ -1,5 +1,14 @@
 # Task board
 
+## Current focused milestone — import responsiveness and FPS
+
+- [x] Measure generated-fixture stages; remove the redundant candidate-CFR decode without weakening source/timestamp checks.
+- [x] Shared bounded import jobs, atomic multi-file publication, cancellation, advisory cards and verified proof reuse.
+- [x] Exact rational timeline FPS command, native selector, first-video matching and separate FPS labels.
+- [x] Integrated locked fmt/strictClippy/default/media/deny gate191distinct tests; corrected duplicate status race and passed final default/native gates and23window checks. Actual pending/FPS pixels inspected; NATIVE_IMPORT_FPS.
+- [x] Matched generated probe median780→446ms, evidence/ADR/docs and verified local CLI reinstall; local commit completes this milestone.
+- [ ] Later: persistent preview cache, mixed-source-FPS composition, restart-resumable preparation, hardware decode/proxies only after benchmarks. Physical drag/dialog/cancellation-device testing remains a separate manual acceptance.
+
 ## Owner's18-image Clipchamp feature plan
 
 The owner has authorized implementation of all eighteen references. Deliver and verify the missing capabilities incrementally; the completed inventory is the scope contract, not editor-parity acceptance. Canonical scope/dependencies: [feature inventory](docs/roadmap/CLIPCHAMP_FEATURE_INVENTORY.md); ADR0014. Both CLI and Studio use the same typed Rust operations. Current B functionality remains verified and preserved; new features need their own gates. Library download/quality/placement follows reviewed redistribution rights; no raw Clipchamp stock.
