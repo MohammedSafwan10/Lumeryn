@@ -95,6 +95,8 @@ pub enum Icon {
     Clip,
     Project,
     Library,
+    Undo,
+    Redo,
     Close,
 }
 pub fn icon_button(ui: &mut egui::Ui, icon: Icon, label: &str) -> egui::Response {
@@ -103,12 +105,20 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, label: &str) -> egui::Response
             .frame(false)
             .min_size(egui::vec2(36.0, 36.0)),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
     paint_icon(
         ui.painter(),
         response.rect.center(),
         icon,
-        if response.hovered() { ACCENT } else { TEXT },
+        if !ui.is_enabled() {
+            MUTED
+        } else if response.hovered() {
+            ACCENT
+        } else {
+            TEXT
+        },
     );
     response.on_hover_text(label)
 }
@@ -120,7 +130,9 @@ pub fn rail_button(ui: &mut egui::Ui, icon: Icon, label: &str, selected: bool) -
             .selected(selected)
             .min_size(egui::vec2(58.0, 66.0)),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
     if selected {
         ui.painter().rect_filled(response.rect, 5.0, RAISED);
         ui.painter().rect_filled(
@@ -302,6 +314,25 @@ fn paint_icon(p: &egui::Painter, center: egui::Pos2, icon: Icon, color: Color32)
             for y in [r.top() + 5.0, r.bottom() - 5.0] {
                 p.line_segment([egui::pos2(r.left(), y), egui::pos2(r.right(), y)], stroke);
             }
+        }
+        Icon::Undo | Icon::Redo => {
+            let sign = if matches!(icon, Icon::Undo) {
+                1.0
+            } else {
+                -1.0
+            };
+            let point = |x: f32, y: f32| center + egui::vec2(sign * x, y);
+            p.add(egui::Shape::line(
+                vec![
+                    point(-7.0, -3.0),
+                    point(1.0, -3.0),
+                    point(6.0, 0.0),
+                    point(6.0, 6.0),
+                ],
+                stroke,
+            ));
+            p.line_segment([point(-7.0, -3.0), point(-2.0, -8.0)], stroke);
+            p.line_segment([point(-7.0, -3.0), point(-2.0, 2.0)], stroke);
         }
         Icon::Library => {
             for x in [r.left(), r.left() + 10.0] {

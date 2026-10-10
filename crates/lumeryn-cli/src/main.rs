@@ -44,7 +44,7 @@ enum Command {
     /// Control a known background render job.
     #[command(subcommand)]
     Jobs(JobCommand),
-    /// JSON Schema generated from the core's batch or final render options.
+    /// JSON Schema generated from shared batch, render or clipboard types.
     Schema {
         #[arg(long, value_enum, default_value = "batch")]
         kind: SchemaKind,
@@ -113,6 +113,25 @@ enum JobCommand {
 
 #[derive(Debug, Subcommand)]
 enum ProjectCommand {
+    /// Restore the previous logical state as a new revision; sole-operation transaction.
+    Undo {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Restore the next logical state as a new revision.
+    Redo {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Inspect undo/redo depths from the persisted shared history contract.
+    HistoryStatus {
+        #[arg(long)]
+        project: PathBuf,
+    },
     /// Read revision/job notifications; expired cursors include a resynchronization snapshot.
     Watch {
         #[arg(long)]
@@ -278,6 +297,26 @@ enum TimelineCommand {
 
 #[derive(Debug, Subcommand)]
 enum ClipCommand {
+    /// Copy one exact clip into a versioned same-project payload (result.clipboard).
+    Copy {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        clip_id: Uuid,
+    },
+    /// Paste a bounded clipboard payload object using already-imported source media.
+    Paste {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        id: Option<Uuid>,
+        #[arg(long)]
+        at_frame: u64,
+        #[arg(long)]
+        dry_run: bool,
+    },
     Split {
         #[command(flatten)]
         write: Write,
@@ -356,6 +395,7 @@ enum ProjectPreset {
 enum SchemaKind {
     Batch,
     Render,
+    Clipboard,
 }
 
 impl ProjectPreset {
@@ -507,7 +547,9 @@ async fn execute(cli: Cli) -> Result<Value> {
         }
         Command::Capabilities => Ok(json!({
             "api_version":1,"project_schema_version":1,"output":"json",
-            "implemented":["project.create","project.open","project.inspect","project.history","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
+            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
+            "history":{"undo_redo":"new monotonic revisions; logical history restored transactionally","undo_redo_batch":"sole operation only","branch_edit_clears_redo":true},
+            "clipboard":{"version":1,"maximum_payload_bytes":16384,"scope":"same project and already-imported BLAKE3 source identity","payload":"result.clipboard object","cross_project_transfer":"staged","paste":"authoritative typed PasteClip with new stable ID and exact source ranges"},
             "requires_external_tools":["media.probe","media.import","render"],
             "export_limits":{"track":"one video track","layout":"1..64 contiguous nonoverlapping clips starting at frame 0","source":"matching CFR; frame timestamps verified","audio":"embedded audio or silence; stereo 48000Hz","color":"baseline SDR; no managed HDR"},
             "export_options":{"resolution":["project","hd720","fhd1080","uhd2160"],"uhd_landscape":[3840,2160],"uhd_portrait":[2160,3840],"fps":[24,25,30,60],"preserve_project_fps":true,"codecs":["mpeg4","h264","h265"],"codec_availability":"installed encoder and actual requested-size initialization","quality":["draft","balanced","high"],"bitrate_kbps_range":[100,200000],"acceleration":["cpu","auto"],"watermark":false,"subscription_required":false,"preview_settings_affect_final":false,"eight_k_hdr_mastering":"staged"},
@@ -516,7 +558,7 @@ async fn execute(cli: Cli) -> Result<Value> {
             "capability_status":{"studio":"native_baseline_prototype","preview":"cpu_decode_gpu_upload_prototype","gpu_encode_decode":"auto_encoding_probe_available_decode_not_integrated","native_text":"planned","device_audio":"cpal_prototype_physical_sync_unmeasured","semantic_vectors":"not_selected","application_database":"planned","fts5":"implemented_metadata_only","cache":"source_content_hashes_only","live_events":"implemented_bounded_replay_snapshot_resync"},
             "components":{"project_service":{"platform":"Windows","transport":"current-user ACL named pipe; remote clients rejected","supported_here":cfg!(windows),"cloud_required":false},"studio":{"executable":"lumeryn-studio","separate_install":true,"stack":"egui/eframe/egui_dock/egui-wgpu/wgpu","preview_gpu_required":true,"hardware_zero_copy":false,"physical_av_sync_verified":false}},
             "job_control":{"render_accepts_job_id":true,"client_disconnect_cancels_render":false,"cancel_command":"jobs cancel --project <path> --job-id <uuid>","render_concurrency":1,"render_queue_limit":16},
-            "planned":["gpu_compositor","hardware_decode_integration","resource_scheduler","models","blender","effects","undo_redo","independent_audio_tracks","transcript_fts5","native_typography","professional_audio_mixing","proxies","incremental_render_cache","vector_index"]
+            "planned":["gpu_compositor","hardware_decode_integration","resource_scheduler","models","blender","effects","independent_audio_tracks","transcript_fts5","native_typography","professional_audio_mixing","proxies","incremental_render_cache","vector_index"]
         })),
         Command::Service(ServiceCommand::Run { project }) => {
             lumeryn_service::serve(project).await?;
@@ -528,6 +570,9 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::Schema { kind } => Ok(match kind {
             SchemaKind::Batch => serde_json::to_value(schemars::schema_for!(Batch))?,
             SchemaKind::Render => serde_json::to_value(schemars::schema_for!(RenderOptions))?,
+            SchemaKind::Clipboard => {
+                serde_json::to_value(schemars::schema_for!(lumeryn_core::clipboard::Clipboard))?
+            }
         }),
         Command::Doctor => tools.versions().await,
         Command::Hardware(HardwareCommand::Scan) => Ok(
@@ -536,6 +581,34 @@ async fn execute(cli: Cli) -> Result<Value> {
             "status":"basic_only","scheduler":"not_implemented"}),
         ),
         Command::Project(command) => match command {
+            ProjectCommand::Undo { write, dry_run } => {
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::Undo {}],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
+            ProjectCommand::Redo { write, dry_run } => {
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::Redo {}],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
+            ProjectCommand::HistoryStatus { project } => {
+                let history = Client::connect(project).await?.history().await?;
+                Ok(serde_json::to_value(lumeryn_core::storage::history_state(
+                    &history,
+                )?)?)
+            }
             ProjectCommand::Watch {
                 project,
                 after_sequence,
@@ -611,6 +684,50 @@ async fn execute(cli: Cli) -> Result<Value> {
             }
         },
         Command::Timeline(command) => match command {
+            TimelineCommand::Clip(ClipCommand::Copy { project, clip_id }) => {
+                let snapshot = Client::connect(project).await?.inspect().await?;
+                Ok(
+                    json!({"clipboard":lumeryn_core::clipboard::Clipboard::copy(&snapshot, clip_id)?}),
+                )
+            }
+            TimelineCommand::Clip(ClipCommand::Paste {
+                mut write,
+                file,
+                id,
+                at_frame,
+                dry_run,
+            }) => {
+                use lumeryn_core::clipboard::{Clipboard, MAX_BYTES};
+                use std::io::Read;
+                let id = operation_id(id, &write)?;
+                let mut bytes = Vec::new();
+                std::fs::File::open(file)?
+                    .take(MAX_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)?;
+                let clipboard = Clipboard::from_slice(&bytes)?;
+                if write.expected_revision.is_none() {
+                    write.expected_revision = Some(
+                        Client::connect(&write.project)
+                            .await?
+                            .inspect()
+                            .await?
+                            .revision,
+                    );
+                }
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::PasteClip {
+                            id,
+                            at_frame,
+                            clipboard,
+                        }],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
             TimelineCommand::Canvas {
                 write,
                 preset,

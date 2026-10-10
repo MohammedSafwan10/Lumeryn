@@ -10,6 +10,7 @@ pub enum Action {
     Trim { clip: Uuid, duration: u64 },
     Split { clip: Uuid, at_frame: u64 },
     Duplicate(Uuid),
+    Copy(Uuid),
     Delete(Uuid),
     Reorder { clip: Uuid, before: Option<Uuid> },
 }
@@ -284,6 +285,7 @@ impl Timeline {
                 body.context_menu(|ui| {
                     if ui.add_enabled(clip.at_frame < playhead && playhead < clip.at_frame + clip.duration_frames, egui::Button::new("Split at playhead   S")).clicked() { actions.push(Action::Split { clip: clip.id, at_frame: playhead }); ui.close(); }
                     if ui.button("Duplicate   Ctrl+D").clicked() { actions.push(Action::Duplicate(clip.id)); ui.close(); }
+                    if ui.button("Copy clip   Ctrl+C").clicked() { actions.push(Action::Copy(clip.id)); ui.close(); }
                     if ui.button("Delete and close gap   Del").clicked() { actions.push(Action::Delete(clip.id)); ui.close(); }
                     ui.separator();
                     if ui.button("Move to beginning").clicked() {

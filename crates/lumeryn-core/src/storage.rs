@@ -16,6 +16,108 @@ use uuid::Uuid;
 
 pub const STORAGE_VERSION: i64 = 1;
 const SEARCH_MIGRATION: &str = include_str!("../migrations/0001_metadata_search.sql");
+const MAX_HISTORY_RECORDS: usize = 100_000;
+const MAX_HISTORY_COMMAND_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HistoryState {
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub current_logical_revision: u64,
+    pub undo_depth: usize,
+    pub redo_depth: usize,
+}
+
+#[derive(Default)]
+struct LogicalHistory {
+    revisions: Vec<u64>,
+    cursor: usize,
+}
+impl LogicalHistory {
+    fn push(&mut self, revision: u64, operations: &[Edit]) -> Result<()> {
+        if revision == 0 {
+            if !self.revisions.is_empty() || !operations.is_empty() {
+                return Err(Error::Invalid(
+                    "initial history must be revision zero with no operations".into(),
+                ));
+            }
+            self.revisions.push(0);
+            return Ok(());
+        }
+        validate_operations(operations)?;
+        match operations {
+            [Edit::Undo {}] => {
+                self.cursor = self
+                    .cursor
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::Invalid("nothing to undo".into()))?
+            }
+            [Edit::Redo {}] => {
+                if self.cursor + 1 >= self.revisions.len() {
+                    return Err(Error::Invalid("nothing to redo".into()));
+                }
+                self.cursor += 1;
+            }
+            _ => {
+                self.revisions.truncate(self.cursor + 1);
+                self.revisions.push(revision);
+                self.cursor = self.revisions.len() - 1;
+            }
+        }
+        Ok(())
+    }
+    fn state(&self) -> Result<HistoryState> {
+        let current_logical_revision = *self
+            .revisions
+            .get(self.cursor)
+            .ok_or_else(|| Error::Invalid("history requires initial revision zero".into()))?;
+        let redo_depth = self.revisions.len() - self.cursor - 1;
+        Ok(HistoryState {
+            can_undo: self.cursor > 0,
+            can_redo: redo_depth > 0,
+            current_logical_revision,
+            undo_depth: self.cursor,
+            redo_depth,
+        })
+    }
+}
+
+/// Derive logical undo/redo state from ordered durable {revision, operations} metadata.
+/// Ordinary batches are one undo step; branch edits invalidate logical redo without deleting rows.
+pub fn history_state(history: &[serde_json::Value]) -> Result<HistoryState> {
+    logical_history(history)?.state()
+}
+
+fn logical_history(history: &[serde_json::Value]) -> Result<LogicalHistory> {
+    if history.is_empty() || history.len() > MAX_HISTORY_RECORDS {
+        return Err(Error::Invalid(
+            "history requires 1..100000 ordered records".into(),
+        ));
+    }
+    let mut logical = LogicalHistory::default();
+    let mut bytes = 0_usize;
+    for (index, record) in history.iter().enumerate() {
+        let revision = record
+            .get("revision")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| Error::Invalid("history revision must be an unsigned integer".into()))?;
+        if revision != index as u64 {
+            return Err(Error::Invalid(
+                "history revisions must be contiguous from zero".into(),
+            ));
+        }
+        let value = record
+            .get("operations")
+            .ok_or_else(|| Error::Invalid("history operations missing".into()))?;
+        bytes = bytes
+            .checked_add(serde_json::to_vec(value)?.len())
+            .filter(|bytes| *bytes <= MAX_HISTORY_COMMAND_BYTES)
+            .ok_or_else(|| Error::Invalid("history commands exceed 64 MiB".into()))?;
+        let operations: Vec<Edit> = serde_json::from_value(value.clone())?;
+        logical.push(revision, &operations)?;
+    }
+    Ok(logical)
+}
 
 pub struct Store {
     connection: SqliteConnection,
@@ -240,21 +342,53 @@ impl Store {
         }
         let previous = project.revision;
         let mut object_ids = Vec::new();
-        for (operation, imported) in batch.operations.iter().zip(imports) {
-            project.apply(operation, imported)?;
-            match operation {
-                Edit::Import { id, .. }
-                | Edit::AddClip { id, .. }
-                | Edit::DuplicateClip { id, .. } => object_ids.push(*id),
-                Edit::TrimClip { clip_id, .. }
-                | Edit::DeleteClip { clip_id, .. }
-                | Edit::ReorderClip { clip_id, .. } => object_ids.push(*clip_id),
-                Edit::SplitClip {
-                    clip_id,
-                    right_clip_id,
-                    ..
-                } => object_ids.extend([*clip_id, *right_clip_id]),
-                Edit::SetCanvas { .. } => object_ids.push(project.id),
+        if matches!(
+            batch.operations.as_slice(),
+            [Edit::Undo {}] | [Edit::Redo {}]
+        ) {
+            let mut records = history_metadata(&mut tx).await?;
+            if records.len() as u64 != previous + 1 {
+                return Err(Error::Invalid(
+                    "history does not match current revision".into(),
+                ));
+            }
+            records.push(serde_json::json!({"revision":previous+1,"operations":batch.operations}));
+            let logical = logical_history(&records)?;
+            let target = logical.state()?.current_logical_revision;
+            let row = sqlx::query("SELECT revision, snapshot FROM history WHERE revision=?")
+                .bind(
+                    i64::try_from(target)
+                        .map_err(|_| Error::Invalid("history revision overflow".into()))?,
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+            let restored =
+                historical_project(row.try_get::<&str, _>("snapshot")?, target, project.id)?;
+            project = restored;
+            object_ids.push(project.id);
+        } else {
+            for (operation, imported) in batch.operations.iter().zip(imports) {
+                project.apply(operation, imported)?;
+                match operation {
+                    Edit::Import { id, .. }
+                    | Edit::AddClip { id, .. }
+                    | Edit::PasteClip { id, .. }
+                    | Edit::DuplicateClip { id, .. } => object_ids.push(*id),
+                    Edit::TrimClip { clip_id, .. }
+                    | Edit::DeleteClip { clip_id, .. }
+                    | Edit::ReorderClip { clip_id, .. } => object_ids.push(*clip_id),
+                    Edit::SplitClip {
+                        clip_id,
+                        right_clip_id,
+                        ..
+                    } => object_ids.extend([*clip_id, *right_clip_id]),
+                    Edit::SetCanvas { .. } => object_ids.push(project.id),
+                    Edit::Undo {} | Edit::Redo {} => {
+                        return Err(Error::Invalid(
+                            "undo/redo must be the only batch operation".into(),
+                        ));
+                    }
+                }
             }
         }
         project.revision = previous
@@ -428,9 +562,13 @@ impl Store {
                 "history revisions are not contiguous".into(),
             ));
         }
-        for (index, row) in rows.into_iter().enumerate() {
-            let previous: Project = serde_json::from_str(row.try_get::<&str, _>("snapshot")?)?;
-            previous.validate()?;
+        let mut logical = LogicalHistory::default();
+        for (index, row) in rows.iter().enumerate() {
+            let previous = historical_project(
+                row.try_get::<&str, _>("snapshot")?,
+                index as u64,
+                project.id,
+            )?;
             let operations: Vec<Edit> = serde_json::from_str(row.try_get::<&str, _>("commands")?)?;
             if row.try_get::<i64, _>("revision")? != index as i64
                 || previous.revision != index as u64
@@ -441,6 +579,24 @@ impl Store {
                 return Err(Error::Invalid(
                     "invalid history revision or command record".into(),
                 ));
+            }
+            logical.push(index as u64, &operations)?;
+            if matches!(operations.as_slice(), [Edit::Undo {}] | [Edit::Redo {}]) {
+                let target = logical.state()?.current_logical_revision;
+                let target_row = rows
+                    .get(target as usize)
+                    .ok_or_else(|| Error::Invalid("history restore target is missing".into()))?;
+                let mut expected = historical_project(
+                    target_row.try_get::<&str, _>("snapshot")?,
+                    target,
+                    project.id,
+                )?;
+                expected.revision = index as u64;
+                if serde_json::to_value(expected)? != serde_json::to_value(previous)? {
+                    return Err(Error::Invalid(
+                        "undo/redo snapshot differs from logical restore target".into(),
+                    ));
+                }
             }
         }
         let version: i64 = sqlx::query_scalar("PRAGMA user_version")
@@ -578,6 +734,33 @@ fn checked_project(row: sqlx::sqlite::SqliteRow) -> Result<Project> {
     Ok(project)
 }
 
+fn historical_project(snapshot: &str, revision: u64, project_id: Uuid) -> Result<Project> {
+    if snapshot.len() > 16 * 1024 * 1024 {
+        return Err(Error::Invalid("history snapshot exceeds 16 MiB".into()));
+    }
+    let project: Project = serde_json::from_str(snapshot)?;
+    project.validate()?;
+    if project.id != project_id || project.revision != revision {
+        return Err(Error::Invalid(
+            "history snapshot identity/revision mismatch".into(),
+        ));
+    }
+    Ok(project)
+}
+
+async fn history_metadata(connection: &mut SqliteConnection) -> Result<Vec<serde_json::Value>> {
+    let sizes=sqlx::query("SELECT count(*) AS records, coalesce(sum(length(CAST(commands AS BLOB))),0) AS bytes FROM history").fetch_one(&mut *connection).await?;
+    if sizes.try_get::<i64, _>("records")? > MAX_HISTORY_RECORDS as i64
+        || sizes.try_get::<i64, _>("bytes")? > MAX_HISTORY_COMMAND_BYTES as i64
+    {
+        return Err(Error::Invalid("undo history exceeds 100000 records or 64 MiB commands; indexed history migration required".into()));
+    }
+    let rows = sqlx::query("SELECT revision, commands FROM history ORDER BY revision")
+        .fetch_all(&mut *connection)
+        .await?;
+    rows.into_iter().map(|row|Ok(serde_json::json!({"revision":row.try_get::<i64,_>("revision")?,"operations":serde_json::from_str::<serde_json::Value>(row.try_get::<&str,_>("commands")?)?}))).collect()
+}
+
 fn search_records(project: &Project) -> Vec<(String, String, String)> {
     let mut records = vec![(
         project.id.to_string(),
@@ -691,9 +874,7 @@ pub async fn prepare_imports(
 }
 
 fn validated_commands(batch: &Batch, key: Option<&str>) -> Result<String> {
-    if batch.operations.is_empty() || batch.operations.len() > 1000 {
-        return Err(Error::Invalid("batch must have 1..1000 operations".into()));
-    }
+    validate_operations(&batch.operations)?;
     if key.is_some_and(|k| k.is_empty() || k.len() > 128) {
         return Err(Error::Invalid(
             "idempotency key must have 1..128 bytes".into(),
@@ -704,4 +885,20 @@ fn validated_commands(batch: &Batch, key: Option<&str>) -> Result<String> {
         return Err(Error::Invalid("commands exceed 1 MiB".into()));
     }
     Ok(commands)
+}
+
+fn validate_operations(operations: &[Edit]) -> Result<()> {
+    if operations.is_empty() || operations.len() > 1000 {
+        return Err(Error::Invalid("batch must have 1..1000 operations".into()));
+    }
+    if operations.len() != 1
+        && operations
+            .iter()
+            .any(|operation| matches!(operation, Edit::Undo {} | Edit::Redo {}))
+    {
+        return Err(Error::Invalid(
+            "undo/redo must be the only batch operation".into(),
+        ));
+    }
+    Ok(())
 }

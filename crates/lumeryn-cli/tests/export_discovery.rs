@@ -23,6 +23,10 @@ fn export_schema_and_capabilities_are_actual_shared_options() -> TestResult {
     assert!(schema.to_string().contains("h265"));
     let batch = cli(&["schema"])?;
     assert_eq!(batch["title"], "Batch");
+    let clipboard = cli(&["schema", "--kind", "clipboard"])?;
+    assert_eq!(clipboard["title"], "Clipboard");
+    assert_eq!(clipboard["additionalProperties"], false);
+    assert!(clipboard["properties"].get("source_blake3").is_some());
     let capabilities = cli(&["capabilities"])?;
     assert_eq!(capabilities["export_options"]["watermark"], false);
     assert_eq!(

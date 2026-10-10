@@ -87,6 +87,15 @@ pub enum Edit {
         width: u32,
         height: u32,
     },
+    PasteClip {
+        id: Uuid,
+        at_frame: u64,
+        clipboard: crate::clipboard::Clipboard,
+    },
+    /// Restore the preceding logical snapshot through the authoritative Store history.
+    Undo {},
+    /// Restore the next logical snapshot through the authoritative Store history.
+    Redo {},
 }
 
 fn default_ripple() -> bool {
@@ -327,6 +336,19 @@ impl Project {
             Edit::SetCanvas { width, height } => {
                 self.width = *width;
                 self.height = *height;
+            }
+            Edit::PasteClip {
+                id,
+                at_frame,
+                clipboard,
+            } => {
+                let edit = crate::clipboard::paste_edit(self, clipboard, *id, *at_frame)?;
+                self.apply(&edit, None)?;
+            }
+            Edit::Undo {} | Edit::Redo {} => {
+                return Err(Error::Unsupported(
+                    "undo/redo requires authoritative persisted history context".into(),
+                ));
             }
         }
         self.validate()

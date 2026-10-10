@@ -1,6 +1,7 @@
 use crate::{app::Session, backend::Command, timeline};
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -29,6 +30,13 @@ enum Stage {
         revision: u64,
         original: u64,
     },
+    StartHistory,
+    History {
+        revision: u64,
+        frames: u64,
+        clips: usize,
+        label: &'static str,
+    },
     Export {
         ui_frames: u64,
     },
@@ -48,10 +56,19 @@ pub struct Smoke {
     asset_wait_started: Option<Instant>,
     asset_wait_expired: bool,
     screenshot_assets: Option<Value>,
+    history_enabled: bool,
+    history_steps: VecDeque<HistoryStep>,
+}
+
+struct HistoryStep {
+    edit: lumeryn_core::Edit,
+    label: &'static str,
+    frames: u64,
+    clips: usize,
 }
 
 impl Smoke {
-    pub fn new(directory: PathBuf) -> Self {
+    pub fn new(directory: PathBuf, history_enabled: bool) -> Self {
         Self {
             directory,
             started: Instant::now(),
@@ -62,6 +79,8 @@ impl Smoke {
             asset_wait_started: None,
             asset_wait_expired: false,
             screenshot_assets: None,
+            history_enabled,
+            history_steps: VecDeque::new(),
         }
     }
 
@@ -96,7 +115,8 @@ impl Smoke {
             "screenshot_assets":self.screenshot_assets,"asset_capture_wait_expired":self.asset_wait_expired,
             "asset_evidence":session.asset_evidence(),
             "render_result":session.last_render,
-            "limitations":["Scripted actions call the same UI command paths; pointer usability and native file-dialog cancellation are separate manual acceptance.","CPU upload timing does not measure GPU completion or photon latency.","VRAM consumption is unknown without telemetry.","Audio device status alone does not prove end-to-end A/V tolerance.","Effects, multi-track composition, undo/redo and proxies remain staged. Thumbnail/waveform caches are bounded; readiness/counts are reported independently of workflow success."]
+            "history_clipboard_acceptance":self.history_enabled,
+            "limitations":["Scripted actions call the same UI command paths; pointer usability and native file-dialog cancellation are separate manual acceptance.","CPU upload timing does not measure GPU completion or photon latency.","VRAM consumption is unknown without telemetry.","Audio device status alone does not prove end-to-end A/V tolerance.","Effects, multi-track composition and proxies remain staged; physical clipboard and keyboard checks remain pending. Thumbnail/waveform caches are bounded; readiness/counts are reported independently of workflow success."]
         });
         if session.send(Command::Report {
             path: self.directory.join("studio-smoke.json"),
@@ -299,11 +319,159 @@ impl Smoke {
                     "cli_edit_live_event",
                     json!({"revision":project.revision,"restored_duration":original}),
                 );
+                if self.history_enabled {
+                    let Some(clip) = project.clips.first() else {
+                        self.finish(
+                            session,
+                            false,
+                            Some("History fixture clip is missing".into()),
+                        );
+                        return;
+                    };
+                    let clipboard = match lumeryn_core::clipboard::Clipboard::copy(project, clip.id)
+                    {
+                        Ok(clipboard) => clipboard,
+                        Err(error) => {
+                            self.finish(session, false, Some(error.to_string()));
+                            return;
+                        }
+                    };
+                    let pasted = Uuid::new_v4();
+                    use lumeryn_core::Edit;
+                    self.history_steps = [
+                        HistoryStep {
+                            edit: Edit::Undo {},
+                            label: "Undo",
+                            frames: original - 1,
+                            clips: 1,
+                        },
+                        HistoryStep {
+                            edit: Edit::Redo {},
+                            label: "Redo",
+                            frames: original,
+                            clips: 1,
+                        },
+                        HistoryStep {
+                            edit: Edit::PasteClip {
+                                id: pasted,
+                                at_frame: original,
+                                clipboard,
+                            },
+                            label: "Paste clip",
+                            frames: original * 2,
+                            clips: 2,
+                        },
+                        HistoryStep {
+                            edit: Edit::Undo {},
+                            label: "Undo",
+                            frames: original,
+                            clips: 1,
+                        },
+                        HistoryStep {
+                            edit: Edit::Redo {},
+                            label: "Redo",
+                            frames: original * 2,
+                            clips: 2,
+                        },
+                        HistoryStep {
+                            edit: Edit::DeleteClip {
+                                clip_id: pasted,
+                                ripple: true,
+                            },
+                            label: "Delete clip",
+                            frames: original,
+                            clips: 1,
+                        },
+                        HistoryStep {
+                            edit: Edit::Undo {},
+                            label: "Undo",
+                            frames: original * 2,
+                            clips: 2,
+                        },
+                        HistoryStep {
+                            edit: Edit::Redo {},
+                            label: "Redo",
+                            frames: original,
+                            clips: 1,
+                        },
+                    ]
+                    .into();
+                    self.stage = Stage::StartHistory;
+                    return;
+                }
                 if session.export(self.directory.join("studio-smoke-export.mp4")) {
                     self.stage = Stage::Export {
                         ui_frames: session.ui_frames,
                     };
                 }
+            }
+            Stage::StartHistory => {
+                let Some(step) = self.history_steps.front() else {
+                    if session.export(self.directory.join("studio-smoke-export.mp4")) {
+                        self.stage = Stage::Export {
+                            ui_frames: session.ui_frames,
+                        };
+                    }
+                    return;
+                };
+                let revision = session
+                    .project
+                    .as_ref()
+                    .map_or(0, |project| project.revision);
+                let submitted = match &step.edit {
+                    lumeryn_core::Edit::Undo {} => session.undo(),
+                    lumeryn_core::Edit::Redo {} => session.redo(),
+                    lumeryn_core::Edit::PasteClip { id, clipboard, .. } => {
+                        match serde_json::to_vec(clipboard) {
+                            Ok(bytes) => session.paste_clip_at_end(&bytes, *id),
+                            Err(error) => {
+                                self.finish(session, false, Some(error.to_string()));
+                                return;
+                            }
+                        }
+                    }
+                    edit => session.edit(edit.clone(), step.label),
+                };
+                if submitted && let Some(step) = self.history_steps.pop_front() {
+                    self.stage = Stage::History {
+                        revision: revision + 1,
+                        frames: step.frames,
+                        clips: step.clips,
+                        label: step.label,
+                    };
+                }
+            }
+            Stage::History {
+                revision,
+                frames,
+                clips,
+                label,
+            } => {
+                let Some(project) = &session.project else {
+                    return;
+                };
+                if project.revision < revision || session.last_complete.as_deref() != Some(label) {
+                    return;
+                }
+                if project.revision != revision
+                    || timeline::total_frames(project) != frames
+                    || project.clips.len() != clips
+                {
+                    self.finish(
+                        session,
+                        false,
+                        Some(format!("History state mismatch after {label}")),
+                    );
+                    return;
+                }
+                if session
+                    .last_frame
+                    .is_none_or(|(presented, _)| presented != revision)
+                {
+                    return;
+                }
+                self.check("native_shared_history_step",json!({"operation":label,"revision":revision,"frames":frames,"clips":clips,"native_presented":session.last_frame}));
+                self.stage = Stage::StartHistory;
             }
             Stage::Export { ui_frames } => {
                 if session.render_busy || session.last_complete.as_deref() != Some("Export") {

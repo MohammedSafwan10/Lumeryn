@@ -31,7 +31,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
     if ($Media) {
         Wait-LumerynTestService
-        cargo test --locked --test workflow --test media_regressions --test live_service --test uhd_export -j 4 -- --include-ignored
+        cargo test --locked --test workflow --test media_regressions --test live_service --test uhd_export --test history_workflow --test undo_redo -j 4 -- --include-ignored
         if ($LASTEXITCODE -ne 0) { throw 'Media acceptance failed' }
         Wait-LumerynTestService
         cargo test -p lumeryn-preview -p lumeryn-service --locked -j 4 -- --include-ignored --test-threads=1

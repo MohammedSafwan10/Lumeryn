@@ -40,6 +40,9 @@ pub struct Options {
     /// Exercise Studio's real UHD/H.264/60 FPS/automatic encoder settings on a disposable project.
     #[arg(long, requires = "smoke")]
     smoke_uhd: bool,
+    /// Exercise shared undo/redo and clipboard paths on the disposable smoke project.
+    #[arg(long, requires = "smoke")]
+    smoke_history: bool,
     /// Capture an actual native UI state without editing the project.
     #[arg(long, requires = "artifact_dir", conflicts_with = "smoke")]
     capture_only: bool,

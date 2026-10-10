@@ -1,5 +1,5 @@
 # Opens the real native window and modifies only freshly generated disposable projects.
-param([switch]$SkipBuild, [switch]$Uhd, [switch]$Portrait)
+param([switch]$SkipBuild, [switch]$Uhd, [switch]$Portrait, [switch]$History)
 $ErrorActionPreference = 'Stop'
 if ($Portrait -and -not $Uhd) { throw '-Portrait requires -Uhd in this acceptance script' }
 $nativeRoot = Split-Path $PSScriptRoot -Parent
@@ -54,6 +54,7 @@ try {
     }
     $nativeArguments = @('--smoke','--project',('"' + $nativeDemo.project + '"'),'--artifact-dir',('"' + $nativeDirectory + '"'))
     if ($Uhd) { $nativeArguments += '--smoke-uhd' }
+    if ($History) { $nativeArguments += '--smoke-history' }
     $nativeWatch = [Diagnostics.Stopwatch]::StartNew()
     $nativeProcess = Start-Process -FilePath (Join-Path $nativeRoot 'target/debug/lumeryn-studio.exe') -ArgumentList $nativeArguments -WindowStyle Normal -PassThru -RedirectStandardError (Join-Path $nativeDirectory 'stderr.log') -RedirectStandardOutput (Join-Path $nativeDirectory 'stdout.log')
     $nativeSamples = [Collections.Generic.List[object]]::new()
@@ -86,6 +87,7 @@ try {
     $nativeMetrics['binaries'] = @{cli_sha256=(Get-FileHash -LiteralPath $nativeCli -Algorithm SHA256).Hash;studio_sha256=(Get-FileHash -LiteralPath $nativeStudio -Algorithm SHA256).Hash}
     Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'process-metrics.json') -Value $nativeMetrics -Depth 10
     if ($nativeProcess.ExitCode -ne 0 -or -not $nativeReport.passed) { throw ('Native smoke failed; inspect ' + $nativeDirectory) }
+    if ($History -and (-not $nativeReport.history_clipboard_acceptance -or @($nativeReport.checks | Where-Object check -eq 'native_shared_history_step').Count -ne 8)) { throw 'Eight native history/clipboard transitions were not verified' }
     if ($Uhd) {
         $expectedWidth = if ($Portrait) { 2160 } else { 3840 }
         $expectedHeight = if ($Portrait) { 3840 } else { 2160 }

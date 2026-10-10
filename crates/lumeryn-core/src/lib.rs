@@ -1,4 +1,5 @@
 //! Shared proprietary editing engine. CLI and future Studio use this command layer.
+pub mod clipboard;
 pub mod error;
 pub mod library;
 pub mod media;

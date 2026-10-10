@@ -49,6 +49,26 @@ lumeryn assets check
 
 The same shared revision-checked edit API supports `timeline canvas --preset landscape|portrait|square` (or both `--width`/`--height`), `timeline clip split --clip-id <id> --right-clip-id <new-id> --at-frame <absolute interior timeline frame>`, `duplicate --clip-id <id> --id <new-id>`, `delete --clip-id <id>` and `reorder --clip-id <id> --before-clip-id <id>`. All writes take explicit `--project` and revision/idempotency options. Split preserves the original left ID; duplication inserts/ripples after the source; reorder preserves ranges and repacks a contiguous sequence (omit before ID to append). Delete ripples by default; `--leave-gap` preserves later positions and makes baseline export fail on that gap. ID-generating operations require explicit new IDs with idempotency keys. Inspect the new revision after each write.
 
+## Undo, redo and same-project clipboard
+
+```powershell
+lumeryn project history-status --project project.lumeryn
+lumeryn project undo --project project.lumeryn --expected-revision 3 --dry-run
+lumeryn project undo --project project.lumeryn --expected-revision 3 --idempotency-key undo-001
+lumeryn project redo --project project.lumeryn --expected-revision 4
+lumeryn schema --kind clipboard
+$copied = lumeryn timeline clip copy --project project.lumeryn --clip-id CLIP_UUID | ConvertFrom-Json
+$copied.result.clipboard | ConvertTo-Json -Depth 8 | Set-Content clipboard.json -Encoding utf8NoBOM
+lumeryn timeline clip paste --project project.lumeryn --file clipboard.json --id NEW_CLIP_UUID --at-frame 120 --expected-revision 5 --dry-run
+lumeryn timeline clip paste --project project.lumeryn --file clipboard.json --id NEW_CLIP_UUID --at-frame 120 --expected-revision 5 --idempotency-key paste-001
+```
+
+Undo/redo restores a logical editing state while committing a new monotonic physical revision. One ordinary atomic batch is one undo step. Revision history remains append-only; a new edit after undo discards the logical redo branch without deleting its durable records. `history-status` derives `can_undo`, `can_redo`, `current_logical_revision`, `undo_depth` and `redo_depth` from the shared storage helper. Empty undo/redo fails explicitly. These commands support the normal revision/idempotency flags and `--dry-run`; JSON `undo`/`redo` must be the sole operation in a batch. Project graph/schema-1 compatibility is preserved.
+
+Copy is read-only and emits `result.clipboard`, a strict version-1 payload containing the project/media UUIDs, imported BLAKE3 identity, rational frame rate and exact source in/duration. Save that payload object, not the whole CLI envelope. Paste requires an explicit timeline `--at-frame`, a new clip ID (generated if omitted without a retry key), already-imported media and the same project/source/rate identity. Its service-side typed `PasteClip` validates against the authoritative current graph and preserves the original source range. It does not move other clips automatically: choose a contiguous append position for the current baseline renderer; overlapping/gapped export remains unsupported.
+
+Clipboard JSON is read with a 16 KiB bound, rejects unknown fields, malformed digests, unsupported versions/rates, missing media, source-range overflow and ID collisions. It contains no source path or executable text; cross-project asset transfer remains staged. If a paste omits `--expected-revision`, the CLI captures the current revision before submitting it. Exact keyed retries bind the entire clipboard payload and return the original receipt even after later undo removes that media; changed payloads with the same key fail. Source files remain immutable references, and actual file identity is checked by project asset checks/rendering.
+
 ## Atomic edits and safe retries
 
 `lumeryn schema` generates draft2020-12 JSON Schema for `Batch` from shared Rust types; semantic validation additionally checks ranges, identities, references, rates and revision constraints. Example JSON file (replace IDs and path):
@@ -73,7 +93,7 @@ Semantic success emits one JSON object to stdout: `ok`, request ID, elapsed mill
 
 Database graph schema1 and storage index version1 are distinct. Older storage version0 can be inspected without automatic migration; use `project backup` then `project migrate` explicitly to add FTS5. Migrations retain editing revisions/history and reject unsupported versions. `project check` validates SQLite, project/history continuity and metadata index; `--assets` also checks sources. Backup uses a consistent SQLite snapshot with integrity verification; it references rather than copies media. Cross-directory backups rebase relative references to the original assets, so a database alone is not a self-contained asset package. Relinking/missing-digest upgrades and owner-mediated corruption repair are future capabilities; never delete or repair a user's database silently.
 
-Native Studio and its preview worker share project revision events with the CLI through the authoritative Windows service. The baseline export runs as a cancellable service job. Resource estimates, native scenes/text/vector/animations, captions, AI voice, Blender, professional mixing, proxies and multi-track effects remain staged. Do not invoke invented syntax or present unsupported features as available. External agents may plan briefs/storyboards and licensed assets now, but the creative acceptance demos require the roadmap's implemented scene/audio/preview capabilities. Verify every final render's actual visuals/audio rather than inferring artistic quality from JSON success.
+Native Studio and its preview worker share project revision events with the CLI through the authoritative Windows service. The baseline export runs as a cancellable service job. Media aliases/project-only removal, resource estimates, native scenes/text/vector/animations, captions, AI voice, Blender, professional mixing, proxies and multi-track effects remain staged. Do not invoke invented syntax or present unsupported features as available. External agents may plan briefs/storyboards and licensed assets now, but the creative acceptance demos require the roadmap's implemented scene/audio/preview capabilities. Verify every final render's actual visuals/audio rather than inferring artistic quality from JSON success.
 
 `./scripts/demo.ps1` generates legally usable synthetic fixtures and executes the real baseline; it is a technical acceptance demonstration, not one of the creative product demos.
 

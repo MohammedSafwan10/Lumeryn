@@ -1,0 +1,37 @@
+# ADR 0017: Shared monotonic history undo and redo
+
+Date: 2026-10-09. Status: accepted and implemented through core/service/CLI/native Studio. Final integrated gate passed105distinct Rust tests and17real native workflow checks; physical keyboard/OS clipboard acceptance remains separate. See testing/HISTORY_CLIPBOARD.md. Original Lumeryn remains proprietary. No new dependency, table or graph/storage migration is introduced.
+
+## Decision
+
+Add strict empty-struct `Edit::Undo {}` and `Edit::Redo {}` operations to the shared Rust command schema. Either must be the only operation in its batch. Unknown fields are rejected. The authoritative Store resolves history context; direct `Project::apply` rejects these commands rather than pretending that a graph alone knows its history.
+
+Undo and redo restore a validated historical project snapshot into a **new** durable revision. Revisions never decrement, existing history rows and receipts are never deleted, and the existing revision check/idempotency/transaction/event model remains valid. Source assets remain immutable references. Each ordinary atomic batch is one logical undo step, including imports, clipboard paste and canvas changes.
+
+Reconstruct the logical stack from ordered durable history command metadata. Revision zero is the base snapshot. Ordinary commits push their durable revision after truncating any logical redo future. Undo moves the logical cursor backward; redo moves it forward. The restored graph's durable revision is overwritten with the new commit revision. Logical revision is the ordinary historical snapshot's revision, so undo/redo command revisions do not become extra undoable edit steps. Editing after undo discards redo availability but retains the old durable rows for audit and backups.
+
+Expose `storage::history_state(&[serde_json::Value]) -> Result<HistoryState>` for shared clients using existing `{revision, operations}` history metadata. It returns `can_undo`, `can_redo`, `current_logical_revision`, `undo_depth` and `redo_depth`. All clients use this same interpretation; no Studio-local history cursor becomes authoritative. Native callers must derive status off the update callback, because metadata replay is real work.
+
+`Edit::PasteClip { id, at_frame, clipboard }` is also authoritative: the validated versioned clipboard payload is serialized into the batch/history/idempotency record, then the existing paste helper checks project/source/rate/range and applies AddClip semantics. Replaying an already committed paste returns its receipt before validating today's graph; it still succeeds after undo removes the imported source reference, without recreating that source or clip. A reused key with a different payload fails.
+
+## Transaction, bounds and recovery
+
+Use the existing `BEGIN IMMEDIATE` writer transaction for commit and a read transaction for dry-run. Check current persisted revision before selecting a restore target. Query command metadata to derive logical state, then fetch exactly one target snapshot through the history revision primary key; ordinary undo/redo execution does not load all historical snapshots. Target project identity, schema, stored revision and graph invariants are validated. Persist current graph, new history row, receipt and rebuilt FTS metadata together. A failure leaves them unchanged; dry-run rolls back and returns the current durable revision and project ID without moving the cursor.
+
+SQLite allows concurrent readers but serializes writes, and `BEGIN IMMEDIATE` establishes the write transaction before the reads needed for mutation. WAL readers see committed snapshots, which supports revision conflict checks and isolated dry-run behavior. These documented SQLite semantics support the implementation; they do not substitute for two-connection tests. [SQLite transactions](https://www.sqlite.org/lang_transaction.html), [SQLite isolation](https://www.sqlite.org/isolation.html).
+
+Metadata reconstruction is O(history commands) with an O(logical revisions) stack. Bound accepted reconstruction to 100,000 durable metadata records and 64MiB serialized command data; each target snapshot retains the existing 16MiB bound. Oversized history fails explicitly and needs a future indexed/checkpointed history design; no silent truncation or loss of older undo is introduced. SQL first checks record count/command-byte aggregate before fetching metadata. The public helper enforces equivalent limits. A prospective undo/redo record is included in its limit validation before commit. Ordinary editing/storage limits remain separate, so exceptionally long projects may outgrow this first undo implementation.
+
+The explicit integrity check already traverses history snapshots; it now validates logical controls and compares every undo/redo row's graph with its referenced logical target, allowing only the expected durable revision difference. This catches a well-formed but incorrectly restored graph. It does not newly certify that every ordinary historical command was re-executed against unmodified source files.
+
+Cross-directory backup rebases media references in **all** stored historical snapshots, as before. Undo/redo in the copy therefore resolves original assets correctly. A live WAL database is backed up with the existing consistent `VACUUM INTO` path, rather than copying the database file alone. [SQLite VACUUM INTO](https://www.sqlite.org/lang_vacuum.html). Undo import removes only the project reference/derived FTS entry; it neither deletes the source nor needs to re-probe it for redo.
+
+## Alternatives
+
+Decrementing the project revision would break optimistic concurrency and live-client revision ordering. Deleting future history rows would discard durable audit/receipts. Inverse-operation undo requires complete inverse contracts for imported metadata, deleted objects and every future operation. A new persisted cursor/branch table can make large-history operations faster, but needs a separately reviewed storage migration. Reusing the existing validated snapshots gives a compatible first slice; metadata indexes/checkpoints should follow measured scale rather than a speculative schema change.
+
+## Executed core evidence and integration limits
+
+Nine tests in `crates/lumeryn-core/tests/undo_redo.rs` passed with the explicit external cases enabled. They cover multiple undo/redo steps, branch invalidation, retained durable rows, UUID/source references, dry-run/replay/conflicts, two concurrent Store writers, reopening, cross-directory backup rebasing, strict extra-field/compound-command rejection and malformed metadata. A tampered but valid restored graph is rejected by integrity checking. Actual generated OGG import undo/redo removes/restores metadata and FTS while preserving source bytes; actual FFV1 video import/add/paste followed by three undos proves replay remains safe when the source reference is absent.
+
+One debug CPU metadata benchmark at 10,000 revisions and 12 samples measured p50 36.27ms and p95 45.13ms. It measures the public helper's JSON/stack work, excluding database reads, snapshot loading, FTS work and native presentation. It is not a large-history latency guarantee or an O(1) claim. Core all-target warning-denied Clippy, owned-source formatting and the default core tests passed; the nine history tests also passed with both external cases enabled. Final workspace gates and cross-client/native acceptance remain lead-owned integration work; this ADR does not assert unexecuted UI shortcuts or a completed full Clipchamp feature set.

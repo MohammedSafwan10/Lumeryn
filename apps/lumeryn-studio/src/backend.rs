@@ -54,10 +54,19 @@ pub enum Command {
 pub enum Message {
     Snapshot(Project),
     Events(Vec<Event>),
-    History(Vec<Value>),
-    Complete { label: String, value: Value },
+    History {
+        entries: Vec<Value>,
+        state: lumeryn_core::storage::HistoryState,
+    },
+    Complete {
+        label: String,
+        value: Value,
+    },
     Connection(String),
-    Error { label: String, message: String },
+    Error {
+        label: String,
+        message: String,
+    },
     Artifact(PathBuf),
 }
 
@@ -75,7 +84,17 @@ pub struct Backend {
 async fn emit(tx: &mpsc::Sender<Envelope>, ctx: &Context, epoch: u64, message: Message) -> bool {
     // Request repaint before waiting for capacity so the UI drains a full bounded channel.
     ctx.request_repaint();
-    tx.send(Envelope { epoch, message }).await.is_ok()
+    if tx.send(Envelope { epoch, message }).await.is_ok() {
+        ctx.request_repaint();
+        true
+    } else {
+        false
+    }
+}
+
+fn history_message(entries: Vec<Value>) -> lumeryn_core::Result<Message> {
+    let state = lumeryn_core::storage::history_state(&entries)?;
+    Ok(Message::History { entries, state })
 }
 
 impl Backend {
@@ -130,8 +149,8 @@ impl Backend {
                                                     {
                                                         revision = Some(snapshot.revision);
                                                         if !emit(&tx, &wake, epoch, Message::Snapshot(snapshot)).await { break; }
-                                                        match watching.history().await {
-                                                            Ok(history) => { if !emit(&tx, &wake, epoch, Message::History(history)).await { break; } }
+                                                        match watching.history().await.and_then(history_message) {
+                                                            Ok(message) => { if !emit(&tx, &wake, epoch, message).await { break; } }
                                                             Err(error) => { if !emit(&tx, &wake, epoch, Message::Error { label: "History".into(), message: error.to_string() }).await { break; } }
                                                         }
                                                     }
@@ -201,8 +220,8 @@ impl Backend {
                                     complete(&responses, &ctx, epoch, label, result).await;
                                 }
                                 Command::History => {
-                                    match client.history().await {
-                                        Ok(history) => { emit(&responses, &ctx, epoch, Message::History(history)).await; }
+                                    match client.history().await.and_then(history_message) {
+                                        Ok(message) => { emit(&responses, &ctx, epoch, message).await; }
                                         Err(error) => { emit(&responses, &ctx, epoch, Message::Error { label: "History".into(), message: error.to_string() }).await; }
                                     }
                                 }

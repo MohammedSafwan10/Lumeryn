@@ -224,6 +224,7 @@ pub struct Session {
     pub error: Option<String>,
     logs: VecDeque<String>,
     pub history: Vec<Value>,
+    history_state: Option<lumeryn_core::storage::HistoryState>,
     pub events: VecDeque<lumeryn_service::Event>,
     edit_busy: bool,
     pub render_busy: bool,
@@ -308,6 +309,7 @@ impl Session {
             error,
             logs: VecDeque::new(),
             history: Vec::new(),
+            history_state: None,
             events: VecDeque::new(),
             edit_busy: false,
             render_busy: false,
@@ -391,6 +393,7 @@ impl Session {
         self.connected = false;
         self.playhead = 0;
         self.history.clear();
+        self.history_state = None;
         self.events.clear();
         self.error = None;
         self.edit_busy = false;
@@ -570,7 +573,10 @@ impl Session {
                         self.events.push_back(event);
                     }
                 }
-                Message::History(history) => self.history = history,
+                Message::History { entries, state } => {
+                    self.history = entries;
+                    self.history_state = Some(state);
+                }
                 Message::Complete { label, value } => {
                     if label == "Export" {
                         self.last_render = Some(value.clone());
@@ -649,6 +655,64 @@ impl Session {
         }
     }
 
+    pub(crate) fn undo(&mut self) -> bool {
+        if self
+            .history_state
+            .as_ref()
+            .is_some_and(|state| state.can_undo)
+        {
+            self.edit(Edit::Undo {}, "Undo")
+        } else {
+            false
+        }
+    }
+    pub(crate) fn redo(&mut self) -> bool {
+        if self
+            .history_state
+            .as_ref()
+            .is_some_and(|state| state.can_redo)
+        {
+            self.edit(Edit::Redo {}, "Redo")
+        } else {
+            false
+        }
+    }
+    fn copy_clip(&mut self, ctx: &egui::Context, id: Uuid) {
+        let result = self
+            .project
+            .as_ref()
+            .ok_or_else(|| lumeryn_core::Error::Invalid("Open a project before copying".into()))
+            .and_then(|project| lumeryn_core::clipboard::Clipboard::copy(project, id))
+            .and_then(|clipboard| serde_json::to_string(&clipboard).map_err(Into::into));
+        match result {
+            Ok(text) => ctx.copy_text(text),
+            Err(error) => self.fail(format!("Copy clip: {error}")),
+        }
+    }
+    pub(crate) fn paste_clip(&mut self, bytes: &[u8]) -> bool {
+        self.paste_clip_at_end(bytes, Uuid::new_v4())
+    }
+    pub(crate) fn paste_clip_at_end(&mut self, bytes: &[u8], id: Uuid) -> bool {
+        let parsed = lumeryn_core::clipboard::Clipboard::from_slice(bytes);
+        match parsed {
+            Ok(clipboard) => {
+                let at_frame = self.project.as_ref().map_or(0, timeline::total_frames);
+                self.edit(
+                    Edit::PasteClip {
+                        id,
+                        at_frame,
+                        clipboard,
+                    },
+                    "Paste clip",
+                )
+            }
+            Err(error) => {
+                self.fail(format!("Paste needs a copied Lumeryn clip: {error}"));
+                false
+            }
+        }
+    }
+
     pub fn seek(&mut self, frame: u64) {
         self.playhead = frame;
         self.frame_wait_until = Some(Instant::now() + Duration::from_secs(30));
@@ -670,7 +734,7 @@ impl Session {
         )
     }
 
-    fn edit(&mut self, operation: Edit, label: &str) -> bool {
+    pub(crate) fn edit(&mut self, operation: Edit, label: &str) -> bool {
         self.edit_batch(
             Batch {
                 operations: vec![operation],
@@ -1432,6 +1496,7 @@ impl Session {
                             "Duplicate clip",
                         );
                     }
+                    timeline::Action::Copy(clip_id) => self.copy_clip(ui.ctx(), clip_id),
                     timeline::Action::Delete(clip_id) => {
                         self.edit(
                             Edit::DeleteClip {
@@ -1726,7 +1791,7 @@ impl Session {
         design::section(
             ui,
             "Edit history",
-            "Committed changes. Undo and redo are not available yet.",
+            "Undo and redo restore edits as new revisions. Your complete history is kept.",
         );
         if ui.button("Refresh").clicked() {
             self.send(Command::History);
@@ -1751,6 +1816,9 @@ impl Session {
                             Some("delete_clip") => "Deleted a clip",
                             Some("reorder_clip") => "Reordered clips",
                             Some("set_canvas") => "Changed canvas size",
+                            Some("undo") => "Undid an edit",
+                            Some("redo") => "Redid an edit",
+                            Some("paste_clip") => "Pasted a clip",
                             _ => "Project updated",
                         });
                     }
@@ -1909,7 +1977,10 @@ impl Studio {
             session.playhead = options.capture_frame;
         }
         let smoke = if options.smoke {
-            options.artifact_dir.clone().map(Smoke::new)
+            options
+                .artifact_dir
+                .clone()
+                .map(|directory| Smoke::new(directory, options.smoke_history))
         } else {
             None
         };
@@ -2007,6 +2078,12 @@ impl Studio {
                 Stroke::new(1.3, design::TEXT),
             );
             menu.on_hover_text(&name);
+            ui.add_enabled_ui(self.session.connected && !self.session.edit_busy && self.session.history_state.as_ref().is_some_and(|state| state.can_undo), |ui| {
+                if design::icon_button(ui,design::Icon::Undo,"Undo last committed edit (Ctrl+Z)").clicked() { self.session.undo(); }
+            });
+            ui.add_enabled_ui(self.session.connected && !self.session.edit_busy && self.session.history_state.as_ref().is_some_and(|state| state.can_redo), |ui| {
+                if design::icon_button(ui,design::Icon::Redo,"Redo (Ctrl+Y or Ctrl+Shift+Z)").clicked() { self.session.redo(); }
+            });
             if self.session.edit_busy {
                 ui.spinner();
                 ui.label(RichText::new("Saving…").small().color(design::MUTED));
@@ -2054,7 +2131,7 @@ impl Studio {
                     }
                     ui.label(
                         RichText::new(
-                            "Space: play / pause\n← →: step one frame\nShift+← →: seek 5 seconds\nF11: full screen\nDrop files to import",
+                            "Space: play / pause\nLeft / Right: step one frame\nShift + Left / Right: seek 5 seconds\nF11: full screen\nDrop files to import",
                         )
                         .small()
                         .color(design::MUTED),
@@ -2257,6 +2334,39 @@ impl eframe::App for Studio {
             }
         }
         if !ctx.egui_wants_keyboard_input() {
+            if !self.export_open
+                && !self.tools_open
+                && !self.fullscreen
+                && !self.session.edit_busy
+                && self.session.connected
+            {
+                if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z)) {
+                    if ctx.input(|i| i.modifiers.shift) {
+                        self.session.redo();
+                    } else {
+                        self.session.undo();
+                    }
+                } else if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Y)) {
+                    self.session.redo();
+                } else if let Some(text) = ctx.input(|i| {
+                    i.events.iter().find_map(|event| {
+                        if let egui::Event::Paste(text) = event {
+                            Some(text.clone())
+                        } else {
+                            None
+                        }
+                    })
+                }) {
+                    self.session.paste_clip(text.as_bytes());
+                } else if ctx.input(|i| {
+                    i.events
+                        .iter()
+                        .any(|event| matches!(event, egui::Event::Copy))
+                }) && let Some(id) = self.session.selected
+                {
+                    self.session.copy_clip(&ctx, id);
+                }
+            }
             if !self.export_open
                 && !self.tools_open
                 && !self.fullscreen
