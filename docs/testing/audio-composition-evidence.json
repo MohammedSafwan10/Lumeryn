@@ -1,0 +1,259 @@
+{
+  "date": "2026-10-10",
+  "base_milestone": "e9f5b3d",
+  "gate": {
+    "dependencies": "audits pass with existing reviewed exceptions",
+    "additional_media_tests": 38,
+    "default_tests": 136,
+    "passed": true,
+    "unique_successful_tests": 174,
+    "command": "./scripts/check.ps1 -Media -Deny"
+  },
+  "native": {
+    "audio_markers": {
+      "limits": "Generated 440Hz linked source and delayed 880Hz independent contribution; decoded marker windows do not establish physical speaker/display A/V timing.",
+      "late_880hz": 0.04414062826610182,
+      "passed": true,
+      "late_440hz": 0.0882080596373409,
+      "early_880hz": 2.43316259147419E-06,
+      "canonical_sample_frames": 96256,
+      "early_440hz": 0.08849085025304163
+    },
+    "render": {
+      "duration_seconds": 2.0,
+      "encoder": "h264_nvenc",
+      "fallback_reason": null,
+      "frame_rate": "60/1",
+      "frames": 120,
+      "hardware": true,
+      "height": 2160,
+      "options": {
+        "acceleration": "auto",
+        "bitrate_kbps": null,
+        "codec": "h264",
+        "fps": 60,
+        "quality": "balanced",
+        "resolution": "uhd2160"
+      },
+      "path": "\\\\?\\D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\studio-699e0675cad74163b845cdca729de147\\studio-smoke-export.mp4",
+      "preset": "h264-aac",
+      "project_revision": 29,
+      "upscaled": true,
+      "verified_full_decode": true,
+      "width": 3840
+    },
+    "revision": 29,
+    "passed": true,
+    "checks": 34,
+    "ui_cpu_ms": {
+      "p95": 4.6765,
+      "limits": "Debug UI CPU work; not display FPS or input latency",
+      "updates": 555,
+      "p50": 1.7759
+    },
+    "command": "./scripts/native-smoke.ps1 -SkipBuild -History -Audio -Uhd"
+  },
+  "review_copy": {
+    "original": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-studio-demo-9344fa87d38947e38e363f97ffb533cd\\project.lumeryn",
+    "original_revision": 10,
+    "original_schema": 1,
+    "project": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\audio-review-copy-6c90adbf06c649b088cd722ce70d0ebb\\project.lumeryn",
+    "revision": 12,
+    "audio_clips": 3,
+    "total_frames": 1497,
+    "sample_frames": 1101882,
+    "asset_id": "oga.hernandack.short-loops.v1.winter-dust",
+    "license": "CC0-1.0",
+    "integrity": {
+      "foreign_keys": "ok",
+      "history": "ok",
+      "project_invariants": "ok",
+      "revision": 12,
+      "source_assets": {
+        "count": 10,
+        "status": "verified"
+      },
+      "sqlite_integrity": "ok",
+      "storage_version": 1
+    },
+    "limits": "Consistent new review copy only; original unchanged. Neural footage is rasterized, not editable semantic scenes. Reviewed OGG integration is verified, subjective musical fit remains unverified."
+  },
+  "captures": [
+    {
+      "name": "wide",
+      "directory": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\audio-final-captures-54d07f5cd39047acbd758a5a6de5fc88\\wide",
+      "revision": 12,
+      "viewport": {
+        "logical_height": 900.0,
+        "logical_width": 1440.0,
+        "pixels_per_point": 1.0
+      },
+      "assets": {
+        "complete": true,
+        "failed_assets": 0,
+        "thumbnails": 9,
+        "waveforms": 9
+      },
+      "screenshot_sha256": "8C440A218769BAF917ACE4EAE29B4AD09214F11F3501517959954282CC1488CA"
+    },
+    {
+      "name": "compact",
+      "directory": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\audio-final-captures-54d07f5cd39047acbd758a5a6de5fc88\\compact",
+      "revision": 12,
+      "viewport": {
+        "logical_height": 640.0,
+        "logical_width": 980.0,
+        "pixels_per_point": 1.0
+      },
+      "assets": {
+        "complete": true,
+        "failed_assets": 0,
+        "thumbnails": 9,
+        "waveforms": 9
+      },
+      "screenshot_sha256": "767E2FF3BBC8BCC663008EA85FC76BD8ACF984F71236BDED50031B14545B0EF0"
+    },
+    {
+      "name": "medium",
+      "directory": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\audio-final-captures-54d07f5cd39047acbd758a5a6de5fc88\\medium",
+      "revision": 12,
+      "viewport": {
+        "logical_height": 800.0,
+        "logical_width": 1280.0,
+        "pixels_per_point": 1.0
+      },
+      "assets": {
+        "complete": true,
+        "failed_assets": 0,
+        "thumbnails": 9,
+        "waveforms": 9
+      },
+      "screenshot_sha256": "3B6E379D687D539128F24D63A6F8989C3AFD38B45DE609137C397FF74C3CCD60"
+    }
+  ],
+  "visual_review": "Lead inspected all3final readonly views and actual workflow PNG",
+  "installed_cli": {
+    "catalogue": {
+      "assets": 352,
+      "bytes": 6075184,
+      "hashes": "verified_sha256",
+      "notices": "present; redistribution rights reviewed separately"
+    },
+    "render_schema": "passed",
+    "schema": "passed",
+    "path": "C:\\Users\\Thumbeja\\.cargo\\bin\\lumeryn.exe",
+    "sha256": "57A271CC34380BBD3C99526BA80C966AAF1D51DC700510FFD803F2513EE11F2D",
+    "capabilities": "passed schema2"
+  },
+  "clean_agent_project": {
+    "integrity": {
+      "foreign_keys": "ok",
+      "history": "ok",
+      "project_invariants": "ok",
+      "revision": 0,
+      "source_assets": {
+        "count": 0,
+        "status": "verified"
+      },
+      "sqlite_integrity": "ok",
+      "storage_version": 1
+    },
+    "video_clips": 0,
+    "audio_clips": 0,
+    "media": 0,
+    "revision": 0,
+    "schema": 2,
+    "path": "D:/Dev/freela/Lumeryn/projects/agent-test/project.lumeryn"
+  },
+  "hashes": [
+    {
+      "path": ".lumeryn-scratch/audio-handoff-gate.log",
+      "sha256": "BF4011E040D7120D3C6666DC31FBFDAAB1530A24B2BEAEFEFAEA839688EB5FC6"
+    },
+    {
+      "path": ".lumeryn-scratch/audio-handoff-build.log",
+      "sha256": "8DA1B4A8F41638C5CAF44C00AF4ED490978C4973A7C928096FA6FD56D992989C"
+    },
+    {
+      "path": ".lumeryn-scratch/audio-handoff-native.log",
+      "sha256": "D3254CB1A42FF18B7EA716EA47605B267CF61D4BEFA881D88941631BB5788C14"
+    },
+    {
+      "path": ".lumeryn-scratch/drag-target/debug/lumeryn.exe",
+      "sha256": "BBE17C54AE6915E03DDCE38C3103F4C7DFC7C204D1DDC218591B0E8F8A77B8C7"
+    },
+    {
+      "path": ".lumeryn-scratch/drag-target/debug/lumeryn-studio.exe",
+      "sha256": "B88F779E58D335E9E3FADFA9C7EF2A8205076639EFBD98B6C1FD657FD329647C"
+    },
+    {
+      "path": ".lumeryn-scratch/studio-699e0675cad74163b845cdca729de147/studio-smoke.json",
+      "sha256": "7E867608817AF81E41C1601F843B3C03932A52A96B78A50D2CE3229D594D6991"
+    },
+    {
+      "path": ".lumeryn-scratch/studio-699e0675cad74163b845cdca729de147/uhd-file-verified.json",
+      "sha256": "975B31F6CC42FB3E2392203626CC98DD520F0C4867E9BCA671A140DCB706682C"
+    },
+    {
+      "path": ".lumeryn-scratch/studio-699e0675cad74163b845cdca729de147/audio-file-verified.json",
+      "sha256": "A1BEFCFC7B00F6E68621A813865671B2B5D461073369DB31CC7B5CAAA16BE2D6"
+    },
+    {
+      "path": ".lumeryn-scratch/studio-699e0675cad74163b845cdca729de147/studio-smoke-export.mp4",
+      "sha256": "A7BC8E6781747EFEBF85F7EC5471BFDF602E18F31EDC9A8DF31C29897975F7A3"
+    },
+    {
+      "path": ".lumeryn-scratch/audio-review-copy-6c90adbf06c649b088cd722ce70d0ebb/music-review.mp4",
+      "sha256": "4C51EFA027AAC15E2172DD86C608B6931D617CDC59869225A0F889C334C01CC1"
+    },
+    {
+      "path": "docs/design/native-audio-v1/wide.png",
+      "sha256": "8C440A218769BAF917ACE4EAE29B4AD09214F11F3501517959954282CC1488CA"
+    },
+    {
+      "path": "docs/design/native-audio-v1/compact.png",
+      "sha256": "767E2FF3BBC8BCC663008EA85FC76BD8ACF984F71236BDED50031B14545B0EF0"
+    },
+    {
+      "path": "docs/design/native-audio-v1/medium.png",
+      "sha256": "3B6E379D687D539128F24D63A6F8989C3AFD38B45DE609137C397FF74C3CCD60"
+    },
+    {
+      "path": "docs/design/native-audio-v1/empty.png",
+      "sha256": "F205731183D8D89549762BFD682D78D5846BAC0FEDBDB2F3A089694F6F0C2A47"
+    }
+  ],
+  "limits": [
+    "720p synthetic/native fixtures upscaled; separate real UHD-detail tests passed.",
+    "Physical pointer/highDPI/dialog/device-change and speaker/display timing not executed.",
+    "Subjective music fit unverified; original neural demonstration is raster footage.",
+    "Detach/fades/audio-only export/more layers/image placement/native text-scenes remain staged.",
+    "Historical design/test material remains outside the clean normal project; source media untouched."
+  ],
+  "publication": "Local only; no uploads/remotes/charges/dependency additions",
+  "reviewed_audio_capture_binary_hashes": [
+    {
+      "path": ".lumeryn-scratch/drag-target/debug/lumeryn.exe",
+      "sha256": "BBE17C54AE6915E03DDCE38C3103F4C7DFC7C204D1DDC218591B0E8F8A77B8C7"
+    },
+    {
+      "path": ".lumeryn-scratch/drag-target/debug/lumeryn-studio.exe",
+      "sha256": "B88F779E58D335E9E3FADFA9C7EF2A8205076639EFBD98B6C1FD657FD329647C"
+    }
+  ],
+  "clean_native_capture": {
+    "passed": true,
+    "visual_review": "Actual empty native UI inspected; no demo placements or error banner",
+    "report_sha256": "6C8C4C223F197A75747B8F43E2070B2C3A8451D4E42CBA0A23D19E98CA7CB406",
+    "report": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\agent-clean-capture-cabd86060cd14ab6aae213973a86a29e\\studio-capture.json",
+    "presented_frame": null,
+    "assets": {
+      "complete": true,
+      "failed_assets": 0,
+      "thumbnails": 0,
+      "waveforms": 0
+    },
+    "session_error": null,
+    "revision": 0
+  }
+}

@@ -1,15 +1,17 @@
 //! Bounded, window-independent audio scheduling foundation.
 //!
-//! This module is not yet an editable Project audio graph. Adapters must supply source
-//! sample counts verified with the same canonical decoder policy, verify source hashes
-//! before and after work, and preserve the existing worker cancellation/output bounds.
+//! Independent tracks use verified decoded sample counts; historical embedded audio
+//! uses an explicit padding policy. Preview and export consume the same generated mix.
 use crate::{
-    Error, Result,
+    Error, Project, Result,
     media::{content_hash, local_file},
     model::MAX_FRAMES,
     time::FrameRate,
 };
-use std::{ffi::OsString, path::PathBuf};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 
 pub const MIX_SAMPLE_RATE: u32 = 48_000;
 pub const MIX_CHANNELS: u16 = 2;
@@ -22,11 +24,13 @@ pub const CANONICAL_DECODE_FILTER: &str =
 ///
 /// The count refers to stereo 48 kHz after the canonical resampling policy, not bytes,
 /// interleaved scalar samples, container duration or the source's native sample rate.
+/// `None` describes historical embedded audio with explicit silence padding. The
+/// public independent-plan constructor never accepts an unproven contribution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioSource {
     pub path: PathBuf,
     pub digest: String,
-    pub canonical_samples: u64,
+    pub canonical_samples: Option<u64>,
 }
 
 /// One independent sound contribution. Frames belong to the project; source samples
@@ -48,6 +52,8 @@ pub struct AudioPlan {
     total_samples: u64,
     sources: Vec<AudioSource>,
     segments: Vec<AudioSegment>,
+    /// Only embedded video contributions may pad beyond unproven/short audio bounds.
+    embedded_padding: Vec<bool>,
 }
 
 /// Generated labels and numeric filter parameters only. Paths are separate argv values.
@@ -86,9 +92,29 @@ impl AudioPlan {
         sources: Vec<AudioSource>,
         segments: Vec<AudioSegment>,
     ) -> Result<Self> {
+        if sources
+            .iter()
+            .any(|source| source.canonical_samples.is_none())
+        {
+            return Err(Error::Invalid(
+                "independent audio requires verified canonical source sample counts".into(),
+            ));
+        }
+        let embedded_padding = vec![false; segments.len()];
+        Self::build(rate, total_frames, sources, segments, embedded_padding)
+    }
+
+    fn build(
+        rate: FrameRate,
+        total_frames: u64,
+        sources: Vec<AudioSource>,
+        segments: Vec<AudioSegment>,
+        embedded_padding: Vec<bool>,
+    ) -> Result<Self> {
         if total_frames == 0
             || sources.len() > MAX_AUDIO_INPUTS
             || segments.len() > MAX_AUDIO_INPUTS
+            || embedded_padding.len() != segments.len()
         {
             return Err(Error::Invalid(
                 "audio plan requires positive visual duration and at most 64 sources/contributions"
@@ -103,8 +129,9 @@ impl AudioPlan {
         }
         for source in &sources {
             if !source.path.is_absolute()
-                || source.canonical_samples == 0
-                || source.canonical_samples > i64::MAX as u64
+                || source
+                    .canonical_samples
+                    .is_some_and(|count| count == 0 || count > i64::MAX as u64)
                 || source.digest.len() != 64
                 || !source
                     .digest
@@ -117,7 +144,7 @@ impl AudioPlan {
                 ));
             }
         }
-        for segment in &segments {
+        for (segment, padding) in segments.iter().zip(&embedded_padding) {
             let source = sources.get(segment.source).ok_or_else(|| {
                 Error::Invalid("audio contribution source index is invalid".into())
             })?;
@@ -141,7 +168,12 @@ impl AudioPlan {
                 .source_in_sample
                 .checked_add(length)
                 .ok_or_else(|| Error::Invalid("audio source range overflow".into()))?;
-            if length == 0 || source_end > source.canonical_samples {
+            if length == 0
+                || (!padding
+                    && source
+                        .canonical_samples
+                        .is_none_or(|count| source_end > count))
+            {
                 return Err(Error::Invalid(
                     "audio contribution exceeds its verified canonical source sample range".into(),
                 ));
@@ -153,11 +185,96 @@ impl AudioPlan {
             total_samples,
             sources,
             segments,
+            embedded_padding,
         })
+    }
+
+    /// Evaluate the authoritative graph outside the writer lock. An absent source
+    /// count is accepted only for historical embedded audio, never independent clips.
+    pub async fn from_project(project: &Project, database: &Path) -> Result<Self> {
+        project.validate()?;
+        let parent = database
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut sources = Vec::new();
+        let mut segments = Vec::new();
+        let mut embedded_padding = Vec::new();
+        let mut clips = project.clips.iter().collect::<Vec<_>>();
+        clips.sort_by_key(|clip| clip.at_frame);
+        let contributions = project.audio_clips.len()
+            + clips
+                .iter()
+                .filter(|clip| {
+                    project
+                        .media
+                        .iter()
+                        .find(|media| media.id == clip.media_id)
+                        .is_some_and(|media| media.metadata.audio.is_some())
+                })
+                .count();
+        if contributions > MAX_AUDIO_INPUTS {
+            return Err(Error::Invalid(
+                "audio plan supports at most 64 embedded/independent contributions".into(),
+            ));
+        }
+        for clip in clips {
+            let media = project
+                .media
+                .iter()
+                .find(|media| media.id == clip.media_id)
+                .ok_or_else(|| Error::NotFound("audio clip media".into()))?;
+            if media.metadata.audio.is_some() {
+                sources.push(project_source(media, parent)?);
+                segments.push(AudioSegment {
+                    source: sources.len() - 1,
+                    at_frame: clip.at_frame,
+                    source_in_sample: sample_boundary(project.frame_rate, clip.source_in_frame)?,
+                    duration_frames: clip.duration_frames,
+                    gain_millidecibels: 0,
+                    muted: false,
+                });
+                embedded_padding.push(true);
+            }
+        }
+        for clip in &project.audio_clips {
+            let media = project
+                .media
+                .iter()
+                .find(|media| media.id == clip.media_id)
+                .ok_or_else(|| Error::NotFound("independent audio clip media".into()))?;
+            sources.push(project_source(media, parent)?);
+            segments.push(AudioSegment {
+                source: sources.len() - 1,
+                at_frame: clip.at_frame,
+                source_in_sample: clip.source_in_sample,
+                duration_frames: clip.duration_frames,
+                gain_millidecibels: clip.gain_millidecibels,
+                muted: clip.muted,
+            });
+            embedded_padding.push(false);
+        }
+        let plan = Self::build(
+            project.frame_rate,
+            project.visual_duration_frames(),
+            sources,
+            segments,
+            embedded_padding,
+        )?;
+        plan.verify_sources().await?;
+        Ok(plan)
     }
 
     pub fn total_samples(&self) -> u64 {
         self.total_samples
+    }
+
+    /// Immutable identities for a streaming adapter's pre/post decoding checks.
+    pub fn output_sources(&self) -> Vec<(PathBuf, String)> {
+        self.sources
+            .iter()
+            .map(|source| (source.path.clone(), source.digest.clone()))
+            .collect()
     }
 
     /// Validate every declared source identity outside the project writer lock.
@@ -222,8 +339,13 @@ impl AudioPlan {
                     10_f64.powf(f64::from(segment.gain_millidecibels) / 20_000.0)
                 )
             };
+            let padding = if self.embedded_padding[index] {
+                format!(",apad=whole_len={},atrim=end_sample={}", end - at, end - at)
+            } else {
+                String::new()
+            };
             filters.push(format!(
-                "[{}:a:0]{CANONICAL_DECODE_FILTER},atrim=start_sample={}:end_sample={source_end},asetpts=PTS-STARTPTS,volume={gain}:precision=float,adelay={at}S:all=1[lumeryn_audio_{index}]",
+                "[{}:a:0]{CANONICAL_DECODE_FILTER},atrim=start_sample={}:end_sample={source_end},asetpts=PTS-STARTPTS{padding},volume={gain}:precision=float,adelay={at}S:all=1[lumeryn_audio_{index}]",
                 input_offset + index, segment.source_in_sample,
             ));
             labels.push_str(&format!("[lumeryn_audio_{index}]"));
@@ -253,6 +375,21 @@ impl AudioPlan {
     /// Standalone bounded-worker arguments for f32 stereo PCM. The caller supplies the
     /// existing timeout, output/queue bounds, cancellation and source checks.
     pub fn pcm_args(&self, start_frame: u64) -> Result<Vec<OsString>> {
+        self.pcm_args_for_device(start_frame, MIX_SAMPLE_RATE, MIX_CHANNELS)
+    }
+
+    /// Device conversion follows the canonical stereo mix; it never changes graph time.
+    pub fn pcm_args_for_device(
+        &self,
+        start_frame: u64,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Result<Vec<OsString>> {
+        if sample_rate == 0 || !(1..=8).contains(&channels) {
+            return Err(Error::Invalid(
+                "audio output requires a positive rate and 1..8 device channels".into(),
+            ));
+        }
         let filter = self.filter_program(0, start_frame)?;
         let mut args = [
             "-hide_banner",
@@ -273,15 +410,47 @@ impl AudioPlan {
             format!("[{}]", filter.output_label).into(),
             "-vn".into(),
             "-ar".into(),
-            MIX_SAMPLE_RATE.to_string().into(),
+            sample_rate.to_string().into(),
             "-ac".into(),
-            MIX_CHANNELS.to_string().into(),
+            channels.to_string().into(),
             "-f".into(),
             "f32le".into(),
             "pipe:1".into(),
         ]);
         Ok(args)
     }
+}
+
+fn project_source(media: &crate::model::Media, parent: &Path) -> Result<AudioSource> {
+    let audio = media
+        .metadata
+        .audio
+        .as_ref()
+        .ok_or_else(|| Error::Unsupported("audio stream required".into()))?;
+    if audio.start_time_micros != 0 || ![1, 2].contains(&audio.channels) {
+        return Err(Error::Unsupported(
+            "audio composition requires zero-origin mono/stereo sources".into(),
+        ));
+    }
+    let path = local_file(&parent.join(&media.path))?;
+    if std::fs::metadata(&path)?.len() != media.metadata.size_bytes {
+        return Err(Error::Invalid(
+            "audio source size changed; reimport media".into(),
+        ));
+    }
+    let digest = media
+        .metadata
+        .blake3
+        .as_ref()
+        .ok_or_else(|| {
+            Error::Unsupported("audio composition requires verified source digest".into())
+        })?
+        .clone();
+    Ok(AudioSource {
+        path,
+        digest,
+        canonical_samples: audio.canonical_samples_48k,
+    })
 }
 
 #[cfg(test)]
@@ -294,7 +463,7 @@ mod tests {
         AudioSource {
             path,
             digest: "a".repeat(64),
-            canonical_samples,
+            canonical_samples: Some(canonical_samples),
         }
     }
     fn segment(source: usize, at_frame: u64, duration_frames: u64) -> AudioSegment {
@@ -426,7 +595,7 @@ mod tests {
         assert!(
             make(
                 vec![AudioSource {
-                    canonical_samples: 0,
+                    canonical_samples: Some(0),
                     ..audio
                 }],
                 vec![valid]
@@ -507,7 +676,7 @@ mod tests {
         Ok(AudioSource {
             digest,
             path,
-            canonical_samples,
+            canonical_samples: Some(canonical_samples),
         })
     }
 

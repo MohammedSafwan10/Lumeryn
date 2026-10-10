@@ -167,11 +167,12 @@ impl Service {
                     return Ok(serde_json::to_value(receipt)?);
                 }
             }
-            let _permit = if batch
-                .operations
-                .iter()
-                .any(|operation| matches!(operation, lumeryn_core::Edit::Import { .. }))
-            {
+            let _permit = if batch.operations.iter().any(|operation| {
+                matches!(
+                    operation,
+                    lumeryn_core::Edit::Import { .. } | lumeryn_core::Edit::AddAudioClip { .. }
+                )
+            }) {
                 Some(
                     self.import_slots
                         .acquire()

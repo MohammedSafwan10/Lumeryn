@@ -368,12 +368,11 @@ async fn thumbnail(path: &Path, media: &Media, tools: &MediaTools) -> Result<Vec
         .video
         .as_ref()
         .ok_or_else(|| Error::Unsupported("No video stream".into()))?;
-    if video.sample_aspect_ratio != "1:1"
-        || video
-            .color_transfer
-            .as_deref()
-            .is_some_and(|t| matches!(t, "smpte2084" | "arib-std-b67"))
-    {
+    let hdr = video
+        .color_transfer
+        .as_deref()
+        .is_some_and(|t| matches!(t, "smpte2084" | "arib-std-b67"));
+    if hdr || (video.sample_aspect_ratio != "1:1" && !static_png_unset_aspect(path, media).await?) {
         return Err(Error::Unsupported(
             "Thumbnail normalization currently requires square-pixel SDR".into(),
         ));
@@ -385,6 +384,30 @@ async fn thumbnail(path: &Path, media: &Media, tools: &MediaTools) -> Result<Vec
         return Err(Error::Media("Incomplete thumbnail frame".into()));
     }
     Ok(bytes)
+}
+
+/// Still PNG metadata may omit pixel aspect. This only permits a presentation
+/// thumbnail; ordinary video, explicit non-square pixels and HDR retain their policy.
+async fn static_png_unset_aspect(path: &Path, media: &Media) -> Result<bool> {
+    let Some(video) = &media.metadata.video else {
+        return Ok(false);
+    };
+    if video.codec != "png"
+        || video.frames != 1
+        || video.start_time_micros != 0
+        || media.metadata.audio.is_some()
+        || !matches!(video.sample_aspect_ratio.as_str(), "unknown" | "0:1")
+        || !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+    {
+        return Ok(false);
+    }
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut signature = [0; 8];
+    file.read_exact(&mut signature).await?;
+    Ok(signature == *b"\x89PNG\r\n\x1a\n")
 }
 
 #[derive(Default)]
@@ -534,6 +557,139 @@ mod tests {
     #[test]
     fn malformed_audio_sample_is_explicit() {
         assert!(Envelope::default().push(f32::NAN).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires installed FFmpeg/FFprobe; actual static PNG thumbnail worker and source checks"]
+    fn real_static_png_unset_aspect_thumbnail_preserves_hash_and_video_policy()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let tools = MediaTools {
+            ffmpeg: std::env::var_os("LUMERYN_FFMPEG")
+                .map_or_else(|| "ffmpeg".into(), PathBuf::from),
+            ffprobe: std::env::var_os("LUMERYN_FFPROBE")
+                .map_or_else(|| "ffprobe".into(), PathBuf::from),
+            timeout: Duration::from_secs(10),
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.lumeryn-scratch/media");
+        std::fs::create_dir_all(&root)?;
+        let directory = root.join(format!("png-assets-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory)?;
+        let source = directory.join("still.PNG");
+        image::RgbaImage::from_pixel(120, 60, image::Rgba([32, 96, 160, 255])).save(&source)?;
+        let runtime = tokio::runtime::Runtime::new()?;
+        let digest = runtime.block_on(content_hash(&source))?;
+        let metadata = runtime.block_on(tools.probe(&source))?;
+        let mut media = Media {
+            id: Uuid::new_v4(),
+            alias: None,
+            path: "still.PNG".into(),
+            metadata,
+        };
+        let video = media
+            .metadata
+            .video
+            .as_ref()
+            .ok_or("Missing PNG metadata")?;
+        assert_eq!(video.codec, "png");
+        assert_eq!(video.frames, 1);
+        assert_eq!(video.sample_aspect_ratio, "unknown");
+        for aspect in ["unknown", "0:1"] {
+            media
+                .metadata
+                .video
+                .as_mut()
+                .ok_or("Missing PNG metadata")?
+                .sample_aspect_ratio = aspect.into();
+            let pixels = runtime.block_on(thumbnail(&source, &media, &tools))?;
+            assert_eq!(pixels.len(), WIDTH * HEIGHT * 4);
+            let center = (HEIGHT / 2 * WIDTH + WIDTH / 2) * 4;
+            assert_eq!(&pixels[center..center + 4], &[32, 96, 160, 255]);
+        }
+        let accepted = media.clone();
+        for exclusion in [
+            "explicit-aspect",
+            "video-codec",
+            "multiple-frames",
+            "animated-codec",
+            "hdr",
+            "offset",
+        ] {
+            let mut rejected = accepted.clone();
+            let video = rejected
+                .metadata
+                .video
+                .as_mut()
+                .ok_or("Missing PNG metadata")?;
+            match exclusion {
+                "explicit-aspect" => video.sample_aspect_ratio = "2:1".into(),
+                "video-codec" => video.codec = "ffv1".into(),
+                "multiple-frames" => video.frames = 2,
+                "animated-codec" => video.codec = "apng".into(),
+                "hdr" => video.color_transfer = Some("smpte2084".into()),
+                "offset" => video.start_time_micros = 1,
+                _ => return Err("Unexpected exclusion fixture".into()),
+            }
+            assert!(
+                matches!(
+                    runtime.block_on(thumbnail(&source, &rejected, &tools)),
+                    Err(Error::Unsupported(_))
+                ),
+                "{exclusion}"
+            );
+        }
+        let forged = directory.join("forged.png");
+        std::fs::write(&forged, b"GIF89aforged-header")?;
+        assert!(matches!(
+            runtime.block_on(thumbnail(&forged, &accepted, &tools)),
+            Err(Error::Unsupported(_))
+        ));
+        let mut project = Project::new("Static PNG cache".into(), 320, 180, "30".parse()?)?;
+        project.media.push(accepted);
+        project.validate()?;
+        let id = media.id;
+        let ctx = egui::Context::default();
+        let mut assets = Assets::new(&ctx, tools.clone())?;
+        assets.sync(&project, &directory.join("project.lumeryn"));
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while assets.pending(id) {
+            assets.poll(&ctx);
+            assert!(Instant::now() < deadline, "PNG thumbnail worker timeout");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(assets.error(id).is_none(), "{:?}", assets.error(id));
+        assert_eq!(
+            assets
+                .thumbnail(id)
+                .ok_or("Missing actual PNG thumbnail")?
+                .size(),
+            [WIDTH, HEIGHT]
+        );
+        assert!(assets.waveform(id).is_none());
+        assert_eq!(runtime.block_on(content_hash(&source))?, digest);
+        // Same-size replacement must be rejected before its bytes reach thumbnail decoding.
+        let mut changed = std::fs::read(&source)?;
+        *changed.last_mut().ok_or("Empty generated PNG")? ^= 1;
+        std::fs::write(&source, changed)?;
+        let mut fresh = Assets::new(&ctx, tools)?;
+        fresh.sync(&project, &directory.join("project.lumeryn"));
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while fresh.pending(id) {
+            fresh.poll(&ctx);
+            assert!(Instant::now() < deadline, "PNG source verification timeout");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            fresh
+                .error(id)
+                .is_some_and(|error| error.contains("Source changed"))
+        );
+        assert!(fresh.thumbnail(id).is_none());
+        drop(assets);
+        drop(fresh);
+        std::fs::remove_file(source)?;
+        std::fs::remove_file(forged)?;
+        std::fs::remove_dir(directory)?;
+        Ok(())
     }
 
     #[test]

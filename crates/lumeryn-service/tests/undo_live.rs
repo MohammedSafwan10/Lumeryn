@@ -243,7 +243,10 @@ async fn concurrent_undo_replay_dry_run_branch_and_reconnect_are_monotonic() -> 
         .await?;
     assert_eq!(reconnected.inspect().await?.revision, 6);
     let mut copy = Store::open(&backup).await?;
-    assert_eq!(copy.inspect().await?.schema_version, 1);
+    assert_eq!(
+        copy.inspect().await?.schema_version,
+        original.schema_version
+    );
     assert_eq!(copy.integrity_check().await?["storage_version"], 1);
     copy.execute(
         &batch(Edit::Redo {}),
@@ -541,10 +544,13 @@ async fn clipboard_paste_is_authoritative_conflict_aware_and_replays_after_undo(
 }
 
 #[tokio::test]
-async fn pre_undo_schema_one_fixture_undo_and_backup_require_no_new_tables() -> Result<()> {
+async fn pre_undo_schema_one_fixture_requires_explicit_graph_migration_before_undo() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("legacy.lumeryn");
-    let original = fixture()?;
+    let mut original = fixture()?;
+    original.schema_version = 1;
+    original.audio_track_id = None;
+    original.validate()?;
     let mut current = original.clone();
     current.revision = 1;
     current.clips[0].duration_frames = 200;
@@ -583,10 +589,66 @@ async fn pre_undo_schema_one_fixture_undo_and_backup_require_no_new_tables() -> 
     connection.close().await?;
     let (client, task) = service(&path).await?;
     assert_eq!(client.inspect().await?.revision, 1);
+    assert_eq!(client.inspect().await?.schema_version, 1);
+    assert_eq!(client.inspect().await?.audio_track_id, None);
     assert!(history_state(&client.history().await?)?.can_undo);
+    client.call(Request::Check { assets: false }).await?;
+    let before = client.watch(None, 0).await?;
+    let durable = client.history().await?;
+    assert!(matches!(
+        execute(&client, batch(Edit::Undo {}), 1).await,
+        Err(Error::Unsupported(_))
+    ));
+    assert_eq!(client.inspect().await?.revision, 1);
+    assert_eq!(client.history().await?, durable);
+    assert_eq!(
+        client.watch(Some(before.sequence), 0).await?.sequence,
+        before.sequence
+    );
+    let legacy_backup = directory.path().join("before-migration.lumeryn");
+    client
+        .call(Request::Backup {
+            output: legacy_backup.clone(),
+        })
+        .await?;
+    let mut legacy_copy = Store::open(&legacy_backup).await?;
+    assert_eq!(legacy_copy.inspect().await?.schema_version, 1);
+    assert_eq!(legacy_copy.inspect().await?.revision, 1);
+    assert_eq!(legacy_copy.inspect().await?.audio_track_id, None);
+    legacy_copy.integrity_check().await?;
+    drop(legacy_copy);
+    let migrated = client.call(Request::Migrate).await?;
+    assert_eq!(migrated["graph_from"], 1);
+    assert_eq!(migrated["graph_to"], 2);
+    assert_eq!(migrated["project_revision"], 1);
+    assert_eq!(client.history().await?, durable);
+    let event = client.watch(Some(before.sequence), 0).await?;
+    assert!(event.sequence > before.sequence);
+    assert!(
+        event
+            .events
+            .iter()
+            .any(|event| event.kind == "storage_migrated" && event.revision == Some(1))
+    );
+    assert!(
+        !event
+            .events
+            .iter()
+            .any(|event| event.kind == "project_committed")
+    );
+    let snapshot = event
+        .snapshot
+        .ok_or_else(|| Error::Invalid("migration watch snapshot is missing".into()))?;
+    assert_eq!(snapshot.schema_version, 2);
+    assert_eq!(snapshot.revision, 1);
+    let audio_track = snapshot
+        .audio_track_id
+        .ok_or_else(|| Error::Invalid("migrated audio track is missing".into()))?;
     client.call(Request::Check { assets: false }).await?;
     execute(&client, batch(Edit::Undo {}), 1).await?;
     assert_eq!(client.inspect().await?.clips[0].duration_frames, 300);
+    assert_eq!(client.inspect().await?.schema_version, 2);
+    assert_eq!(client.inspect().await?.audio_track_id, Some(audio_track));
     client.call(Request::Check { assets: false }).await?;
     let backup = directory.path().join("legacy-backup.lumeryn");
     client
@@ -596,6 +658,8 @@ async fn pre_undo_schema_one_fixture_undo_and_backup_require_no_new_tables() -> 
         .await?;
     let mut copied = Store::open(&backup).await?;
     assert_eq!(copied.inspect().await?.revision, 2);
+    assert_eq!(copied.inspect().await?.schema_version, 2);
+    assert_eq!(copied.inspect().await?.audio_track_id, Some(audio_track));
     copied.integrity_check().await?;
     drop(copied);
     let mut connection = SqliteConnection::connect_with(

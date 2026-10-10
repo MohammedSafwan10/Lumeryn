@@ -23,3 +23,7 @@ Both CLI and future Studio must write through the same authoritative Rust projec
 ## Alternatives, overhead and limits
 
 Client-server databases add deployment/network availability and privacy overhead and are unnecessary for a local desktop project. rusqlite is credible but would duplicate the selected persistence stack. Binary blobs enlarge backups and complicate relocation/cache cleanup. A single global-only project store would undermine project portability. SQLite WAL is unsuitable for network filesystems; portable means a consistent closed/checkpointed snapshot plus relocatable assets, not arbitrary live copies. CPU/disk costs of FULL synchronization, whole-graph serialization and FTS rebuilding need measured scaling; no throughput claim is made. Schema compatibility, crash recovery, long-reader checkpointing and safe backups remain explicit test gates.
+
+## Schema 2 audio integration update — 2026-10-10
+
+The authoritative Windows service and live revision events are now implemented (ADR0010). ADR0021 adds one independent audio track and verified-source clips while keeping SQLite storage/index version1. Explicit migration upgrades every historical snapshot and the current graph atomically, retaining editing revisions, commands and receipts. Studio creates a new consistent backup before its owner-invoked upgrade; ordinary open does not mutate an old graph. Unchanged-revision schema migration refreshes connected Studio. See ADR0021 for bounds, rollback and source-proof rules.

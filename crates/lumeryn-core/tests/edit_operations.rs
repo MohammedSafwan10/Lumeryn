@@ -1,7 +1,7 @@
 use lumeryn_core::{
     Batch, Edit, Error, MediaTools, Project, Result, Store,
     media::{Metadata, Video},
-    model::{Clip, MAX_FRAMES, Media},
+    model::{Clip, MAX_FRAMES, Media, SCHEMA_VERSION},
 };
 use uuid::Uuid;
 
@@ -166,7 +166,7 @@ async fn exact_split_duplicate_reorder_and_ripple_delete_preserve_sources() -> R
         ]
     );
     let snapshot = store.inspect().await?;
-    assert_eq!(snapshot.schema_version, 1);
+    assert_eq!(snapshot.schema_version, SCHEMA_VERSION);
     assert_eq!(snapshot.frame_rate, project.frame_rate);
     assert_eq!(serde_json::to_value(&snapshot.media)?, original_media);
     assert_eq!(std::fs::read(source)?, source_bytes);
@@ -455,7 +455,7 @@ async fn canvas_presets_keep_fps_and_sequence_overflow_is_rejected() -> Result<(
         let snapshot = store.inspect().await?;
         assert_eq!((snapshot.width, snapshot.height), (width, height));
         assert_eq!(snapshot.frame_rate, project.frame_rate);
-        assert_eq!(snapshot.schema_version, 1);
+        assert_eq!(snapshot.schema_version, SCHEMA_VERSION);
     }
     store.integrity_check().await?;
     Ok(())

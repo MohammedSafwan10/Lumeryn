@@ -176,6 +176,7 @@ impl PreviewPlayer {
         Ok(())
     }
     /// Accepted asynchronously; inspect `status().error` for validation/decode failures.
+    /// A valid empty visual graph clears preview to idle without opening media or devices.
     pub fn load(&self, project: Project, database: PathBuf) -> Result<()> {
         self.changing(|g| Command::Load(project, database, g))
     }
@@ -384,8 +385,14 @@ async fn run(
                         session = None; playing = false;
                         pending_start = 0; loading_generation = g;
                         if let Some(task) = building.take() { task.abort(); }
-                        update(&status, |s| { s.playing = false; s.error = None; s.generation = g; s.total_frames = 0; });
-                        building = Some(tokio::spawn(async move { (g, Plan::build(project, &database, config).await) }));
+                        update(&status, |s| { *s = PreviewStatus {generation:g,project_revision:project.revision,..Default::default()}; });
+                        if project.clips.is_empty() {
+                            // Empty editing projects are ordinary idle state, but still
+                            // validate all graph invariants before accepting them.
+                            if let Err(error) = project.validate() {update(&status, |s| s.error = Some(error.to_string()));}
+                        } else {
+                            building = Some(tokio::spawn(async move { (g, Plan::build(project, &database, config).await) }));
+                        }
                     }
                     Command::Play => { playing = session.is_some() || building.is_some(); if let Some(s) = &mut session && !s.first { s.clock.play(); if let Some(a) = &s.audio { a.set_playing(true); } } }
                     Command::Pause => { playing = false; if let Some(s) = &mut session { s.clock.pause(s.plan.rate); if let Some(a) = &s.audio { a.set_playing(false); } } }

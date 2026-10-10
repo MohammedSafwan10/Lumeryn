@@ -330,13 +330,19 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
     let variants = schema["$defs"]["Edit"]["oneOf"]
         .as_array()
         .ok_or("missing operation variants")?;
-    assert_eq!(variants.len(), 14);
+    assert_eq!(variants.len(), 20);
     for example in [
         json!({"operation":"import","id":"00000000-0000-4000-8000-000000000001","path":"source.mp4"}),
         json!({"operation":"rename_media","media_id":"00000000-0000-4000-8000-000000000001","alias":"Opening shot"}),
         json!({"operation":"remove_media","media_id":"00000000-0000-4000-8000-000000000001"}),
         json!({"operation":"add_clip","id":"00000000-0000-4000-8000-000000000002","media_id":"00000000-0000-4000-8000-000000000001","at_frame":0,"source_in_frame":0,"duration_frames":30}),
         json!({"operation":"insert_clip","id":"00000000-0000-4000-8000-000000000002","media_id":"00000000-0000-4000-8000-000000000001","before_clip_id":null,"source_in_frame":0,"duration_frames":30}),
+        json!({"operation":"add_audio_clip","id":"00000000-0000-4000-8000-000000000002","media_id":"00000000-0000-4000-8000-000000000001","at_frame":0,"source_in_sample":0,"duration_frames":30,"gain_millidecibels":0,"muted":false}),
+        json!({"operation":"move_audio_clip","clip_id":"00000000-0000-4000-8000-000000000002","at_frame":30}),
+        json!({"operation":"trim_audio_clip","clip_id":"00000000-0000-4000-8000-000000000002","source_in_sample":100,"duration_frames":20}),
+        json!({"operation":"set_audio_range","clip_id":"00000000-0000-4000-8000-000000000002","at_frame":30,"source_in_sample":100,"duration_frames":20}),
+        json!({"operation":"set_audio_properties","clip_id":"00000000-0000-4000-8000-000000000002","gain_millidecibels":-6000,"muted":false}),
+        json!({"operation":"delete_audio_clip","clip_id":"00000000-0000-4000-8000-000000000002"}),
         json!({"operation":"trim_clip","clip_id":"00000000-0000-4000-8000-000000000002","source_in_frame":10,"duration_frames":20}),
         json!({"operation":"split_clip","clip_id":"00000000-0000-4000-8000-000000000002","right_clip_id":"00000000-0000-4000-8000-000000000003","at_frame":15}),
         json!({"operation":"duplicate_clip","clip_id":"00000000-0000-4000-8000-000000000002","id":"00000000-0000-4000-8000-000000000003"}),

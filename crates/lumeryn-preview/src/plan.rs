@@ -1,6 +1,7 @@
 use crate::PreviewConfig;
 use lumeryn_core::{
     Error, Project, Result,
+    audio_plan::AudioPlan,
     media::{content_hash, local_file},
     time::FrameRate,
 };
@@ -27,6 +28,7 @@ pub(crate) struct Plan {
     pub revision: u64,
     pub width: u32,
     pub height: u32,
+    pub audio_plan: Option<AudioPlan>,
 }
 
 impl Plan {
@@ -111,6 +113,11 @@ impl Plan {
             config.max_width,
             config.max_height,
         );
+        let audio_plan = if project.audio_clips.is_empty() {
+            None
+        } else {
+            Some(AudioPlan::from_project(&project, database).await?)
+        };
         Ok(Self {
             segments,
             total,
@@ -118,6 +125,7 @@ impl Plan {
             rate: project.frame_rate,
             width,
             height,
+            audio_plan,
         })
     }
 }

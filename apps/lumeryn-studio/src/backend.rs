@@ -31,6 +31,7 @@ pub enum Command {
         job_id: Uuid,
     },
     History,
+    Migrate,
     CliTrim {
         clip: Uuid,
         source_in: u64,
@@ -145,9 +146,9 @@ impl Backend {
                                                 Ok(batch) => {
                                                     sequence = Some(batch.sequence);
                                                     if let Some(snapshot) = batch.snapshot
-                                                        && (revision != Some(snapshot.revision) || batch.resync)
+                                                        && (revision != Some((snapshot.revision,snapshot.schema_version)) || batch.resync)
                                                     {
-                                                        revision = Some(snapshot.revision);
+                                                        revision = Some((snapshot.revision,snapshot.schema_version));
                                                         if !emit(&tx, &wake, epoch, Message::Snapshot(snapshot)).await { break; }
                                                         match watching.history().await.and_then(history_message) {
                                                             Ok(message) => { if !emit(&tx, &wake, epoch, message).await { break; } }
@@ -224,6 +225,16 @@ impl Backend {
                                         Ok(message) => { emit(&responses, &ctx, epoch, message).await; }
                                         Err(error) => { emit(&responses, &ctx, epoch, Message::Error { label: "History".into(), message: error.to_string() }).await; }
                                     }
+                                }
+                                Command::Migrate => {
+                                    let result=async {
+                                        let parent=database.parent().ok_or_else(||Error::Invalid("Project folder is missing".into()))?;
+                                        let backup=parent.join(format!("before-audio-migration-{}.lumeryn",Uuid::new_v4()));
+                                        client.call(Request::Backup {output:backup.clone()}).await?;
+                                        let migration=client.call(Request::Migrate).await?;
+                                        Ok(serde_json::json!({"backup":backup,"migration":migration}))
+                                    }.await;
+                                    complete(&responses,&ctx,epoch,"Upgrade project".into(),result).await;
                                 }
                                 Command::Render { output, revision, job_id, options } => {
                                     if renderer.as_ref().is_some_and(|task| !task.is_finished()) {

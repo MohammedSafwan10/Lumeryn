@@ -63,6 +63,7 @@ fn fixture() -> Result<Project> {
                     sample_rate: 48_000,
                     channels: 2,
                     start_time_micros: 0,
+                    canonical_samples_48k: None,
                 }),
             },
         },
@@ -202,9 +203,19 @@ fn rename_command_requires_alias_presence_and_schema_preserves_null_reset() -> R
 #[test]
 fn aliases_are_bounded_display_text_and_absent_fields_keep_legacy_shape() -> Result<()> {
     let mut project = fixture()?;
+    project.schema_version = 1;
+    project.audio_track_id = None;
+    project.audio_clips.clear();
     assert_eq!(project.media[0].display_name(), "opening shot");
     let legacy = serde_json::to_value(&project)?;
     assert!(legacy["media"][0].get("alias").is_none());
+    assert!(legacy.get("audio_track_id").is_none());
+    assert!(legacy.get("audio_clips").is_none());
+    assert!(
+        legacy["media"][2]["metadata"]["audio"]
+            .get("canonical_samples_48k")
+            .is_none()
+    );
     let roundtrip: Project = serde_json::from_value(legacy.clone())?;
     assert!(roundtrip.media.iter().all(|media| media.alias.is_none()));
     assert_eq!(serde_json::to_value(roundtrip)?, legacy);
@@ -618,7 +629,10 @@ async fn absent_alias_legacy_snapshot_and_exact_search_survive_open_undo_and_bac
 {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("legacy.lumeryn");
-    let original = fixture()?;
+    let mut original = fixture()?;
+    original.schema_version = 1;
+    original.audio_track_id = None;
+    original.audio_clips.clear();
     let media_id = original.media[0].id;
     let mut created = Store::create(&path, &original).await?;
     created.integrity_check().await?;
@@ -645,6 +659,30 @@ async fn absent_alias_legacy_snapshot_and_exact_search_survive_open_undo_and_bac
         .await?;
     assert_eq!(copied, saved);
     backup_conn.close().await?;
+    assert!(matches!(
+        execute(
+            &mut store,
+            Edit::RenameMedia {
+                media_id,
+                alias: Some("must migrate".into())
+            },
+            0
+        )
+        .await,
+        Err(Error::Unsupported(_))
+    ));
+    let migration = store.migrate().await?;
+    assert_eq!(migration["graph_from"], 1);
+    assert_eq!(migration["graph_to"], lumeryn_core::model::SCHEMA_VERSION);
+    let migrated = store.inspect().await?;
+    original.schema_version = lumeryn_core::model::SCHEMA_VERSION;
+    original.audio_track_id = migrated.audio_track_id;
+    same_graph(migrated, original.clone())?;
+    let migrated_saved: String =
+        sqlx::query_scalar("SELECT snapshot FROM history WHERE revision=0")
+            .fetch_one(&mut conn)
+            .await?;
+    assert_eq!(migrated_saved, serde_json::to_string(&original)?);
     execute(
         &mut store,
         Edit::RenameMedia {
@@ -659,7 +697,7 @@ async fn absent_alias_legacy_snapshot_and_exact_search_survive_open_undo_and_bac
     let unchanged: String = sqlx::query_scalar("SELECT snapshot FROM history WHERE revision=0")
         .fetch_one(&mut conn)
         .await?;
-    assert_eq!(unchanged, saved);
+    assert_eq!(unchanged, migrated_saved);
     let text_after: String = sqlx::query_scalar("SELECT text FROM search_index WHERE object_id=?")
         .bind(media_id.to_string())
         .fetch_one(&mut conn)

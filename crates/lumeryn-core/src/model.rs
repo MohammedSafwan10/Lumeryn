@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::PathBuf};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const MAX_FRAMES: u64 = 1_000_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -18,8 +18,12 @@ pub struct Project {
     pub height: u32,
     pub frame_rate: FrameRate,
     pub video_track_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_track_id: Option<Uuid>,
     pub media: Vec<Media>,
     pub clips: Vec<Clip>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_clips: Vec<AudioClip>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -57,10 +61,57 @@ pub struct Clip {
     pub duration_frames: u64,
 }
 
+/// Independent audio uses canonical 48 kHz source samples and rational project frames.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AudioClip {
+    pub id: Uuid,
+    pub media_id: Uuid,
+    pub track_id: Uuid,
+    pub at_frame: u64,
+    pub source_in_sample: u64,
+    pub duration_frames: u64,
+    pub gain_millidecibels: i32,
+    pub muted: bool,
+}
+
 /// Commands contain no executable text. IDs may be supplied for batch references.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
+    AddAudioClip {
+        id: Uuid,
+        media_id: Uuid,
+        at_frame: u64,
+        source_in_sample: u64,
+        duration_frames: u64,
+        gain_millidecibels: i32,
+        muted: bool,
+    },
+    MoveAudioClip {
+        clip_id: Uuid,
+        at_frame: u64,
+    },
+    TrimAudioClip {
+        clip_id: Uuid,
+        source_in_sample: u64,
+        duration_frames: u64,
+    },
+    /// Update position and source range together, validating only their final combination.
+    SetAudioRange {
+        clip_id: Uuid,
+        at_frame: u64,
+        source_in_sample: u64,
+        duration_frames: u64,
+    },
+    SetAudioProperties {
+        clip_id: Uuid,
+        gain_millidecibels: i32,
+        muted: bool,
+    },
+    DeleteAudioClip {
+        clip_id: Uuid,
+    },
     Import {
         id: Uuid,
         path: PathBuf,
@@ -168,19 +219,29 @@ impl Project {
             height,
             frame_rate,
             video_track_id: Uuid::new_v4(),
+            audio_track_id: Some(Uuid::new_v4()),
             media: Vec::new(),
             clips: Vec::new(),
+            audio_clips: Vec::new(),
         };
         project.validate()?;
         Ok(project)
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != SCHEMA_VERSION {
+        if !(1..=SCHEMA_VERSION).contains(&self.schema_version) {
             return Err(Error::Unsupported(format!(
                 "project schema {}",
                 self.schema_version
             )));
+        }
+        if (self.schema_version == 1
+            && (self.audio_track_id.is_some() || !self.audio_clips.is_empty()))
+            || (self.schema_version == SCHEMA_VERSION && self.audio_track_id.is_none())
+        {
+            return Err(Error::Invalid(
+                "audio track does not match project schema".into(),
+            ));
         }
         if self.name.trim().is_empty()
             || self.name.len() > 256
@@ -192,6 +253,7 @@ impl Project {
             || !self.height.is_multiple_of(2)
             || self.media.len() > 10_000
             || self.clips.len() > 10_000
+            || self.audio_clips.len() > crate::audio_plan::MAX_AUDIO_INPUTS
             || self.revision > i64::MAX as u64
         {
             return Err(Error::Invalid(
@@ -200,8 +262,10 @@ impl Project {
         }
         let mut ids = HashSet::from([self.id, self.video_track_id]);
         if self.id == self.video_track_id
+            || self.audio_track_id.is_some_and(|id| !ids.insert(id))
             || self.media.iter().any(|m| !ids.insert(m.id))
             || self.clips.iter().any(|c| !ids.insert(c.id))
+            || self.audio_clips.iter().any(|c| !ids.insert(c.id))
         {
             return Err(Error::Invalid("object IDs must be unique".into()));
         }
@@ -241,7 +305,12 @@ impl Project {
                     || v.frames == 0
                     || v.frames > MAX_FRAMES
             }) || media.metadata.audio.as_ref().is_some_and(|a| {
-                a.sample_rate == 0 || a.sample_rate > 384_000 || a.channels == 0 || a.channels > 64
+                a.sample_rate == 0
+                    || a.sample_rate > 384_000
+                    || a.channels == 0
+                    || a.channels > 64
+                    || a.canonical_samples_48k
+                        .is_some_and(|samples| samples == 0 || samples > i64::MAX as u64)
             }) || (media.metadata.video.is_none() && media.metadata.audio.is_none())
             {
                 return Err(Error::Invalid("invalid media metadata".into()));
@@ -249,6 +318,71 @@ impl Project {
         }
         for clip in &self.clips {
             self.validate_clip(clip)?;
+        }
+        for clip in &self.audio_clips {
+            self.validate_audio_clip(clip)?;
+        }
+        Ok(())
+    }
+
+    pub fn visual_duration_frames(&self) -> u64 {
+        self.clips
+            .iter()
+            .map(|clip| clip.at_frame.saturating_add(clip.duration_frames))
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn validate_audio_clip(&self, clip: &AudioClip) -> Result<()> {
+        let media = self
+            .media
+            .iter()
+            .find(|media| media.id == clip.media_id)
+            .ok_or_else(|| Error::NotFound(format!("media {}", clip.media_id)))?;
+        let audio = media.metadata.audio.as_ref().ok_or_else(|| {
+            Error::Unsupported("independent placement requires an audio source".into())
+        })?;
+        let samples = audio
+            .canonical_samples_48k
+            .filter(|samples| *samples > 0 && *samples <= i64::MAX as u64)
+            .ok_or_else(|| {
+                Error::Invalid(
+                    "independent audio requires verified canonical 48 kHz sample count".into(),
+                )
+            })?;
+        if media.metadata.blake3.is_none()
+            || audio.start_time_micros != 0
+            || !(1..=2).contains(&audio.channels)
+        {
+            return Err(Error::Unsupported(
+                "independent audio requires hashed mono/stereo zero-origin source".into(),
+            ));
+        }
+        let end = clip
+            .at_frame
+            .checked_add(clip.duration_frames)
+            .ok_or_else(|| Error::Invalid("audio timeline overflow".into()))?;
+        if clip.duration_frames == 0
+            || end > self.visual_duration_frames()
+            || end > MAX_FRAMES
+            || Some(clip.track_id) != self.audio_track_id
+            || !(-60_000..=12_000).contains(&clip.gain_millidecibels)
+        {
+            return Err(Error::Invalid(
+                "invalid audio track/gain/range; shorten audio or extend visual timeline".into(),
+            ));
+        }
+        let length = crate::audio_plan::sample_boundary(self.frame_rate, end)?
+            - crate::audio_plan::sample_boundary(self.frame_rate, clip.at_frame)?;
+        if length == 0
+            || clip
+                .source_in_sample
+                .checked_add(length)
+                .is_none_or(|end| end > samples)
+        {
+            return Err(Error::Invalid(
+                "audio range exceeds verified canonical source samples".into(),
+            ));
         }
         Ok(())
     }
@@ -290,7 +424,74 @@ impl Project {
     }
 
     pub(crate) fn apply(&mut self, operation: &Edit, imported: Option<Media>) -> Result<()> {
+        if self.schema_version != SCHEMA_VERSION {
+            return Err(Error::Unsupported(
+                "run project migrate before editing legacy project schema".into(),
+            ));
+        }
         match operation {
+            Edit::AddAudioClip {
+                id,
+                media_id,
+                at_frame,
+                source_in_sample,
+                duration_frames,
+                gain_millidecibels,
+                muted,
+            } => {
+                self.audio_clips.push(AudioClip {
+                    id: *id,
+                    media_id: *media_id,
+                    track_id: self
+                        .audio_track_id
+                        .ok_or_else(|| Error::Invalid("missing audio track".into()))?,
+                    at_frame: *at_frame,
+                    source_in_sample: *source_in_sample,
+                    duration_frames: *duration_frames,
+                    gain_millidecibels: *gain_millidecibels,
+                    muted: *muted,
+                });
+            }
+            Edit::MoveAudioClip { clip_id, at_frame } => {
+                self.audio_clip_mut(*clip_id)?.at_frame = *at_frame
+            }
+            Edit::TrimAudioClip {
+                clip_id,
+                source_in_sample,
+                duration_frames,
+            } => {
+                let clip = self.audio_clip_mut(*clip_id)?;
+                clip.source_in_sample = *source_in_sample;
+                clip.duration_frames = *duration_frames;
+            }
+            Edit::SetAudioProperties {
+                clip_id,
+                gain_millidecibels,
+                muted,
+            } => {
+                let clip = self.audio_clip_mut(*clip_id)?;
+                clip.gain_millidecibels = *gain_millidecibels;
+                clip.muted = *muted;
+            }
+            Edit::SetAudioRange {
+                clip_id,
+                at_frame,
+                source_in_sample,
+                duration_frames,
+            } => {
+                let clip = self.audio_clip_mut(*clip_id)?;
+                clip.at_frame = *at_frame;
+                clip.source_in_sample = *source_in_sample;
+                clip.duration_frames = *duration_frames;
+            }
+            Edit::DeleteAudioClip { clip_id } => {
+                let index = self
+                    .audio_clips
+                    .iter()
+                    .position(|clip| clip.id == *clip_id)
+                    .ok_or_else(|| Error::NotFound(format!("audio clip {clip_id}")))?;
+                self.audio_clips.remove(index);
+            }
             Edit::Import { .. } => self
                 .media
                 .push(imported.ok_or_else(|| Error::Invalid("import must be prepared".into()))?),
@@ -313,6 +514,12 @@ impl Project {
                     .iter()
                     .filter(|clip| clip.media_id == *media_id)
                     .count();
+                let usage_count = usage_count
+                    + self
+                        .audio_clips
+                        .iter()
+                        .filter(|clip| clip.media_id == *media_id)
+                        .count();
                 if usage_count > 0 {
                     return Err(Error::Invalid(format!(
                         "media {media_id} is referenced by {usage_count} clip(s); remove its clips first"
@@ -466,6 +673,13 @@ impl Project {
             .iter()
             .position(|clip| clip.id == id)
             .ok_or_else(|| Error::NotFound(format!("clip {id}")))
+    }
+
+    fn audio_clip_mut(&mut self, id: Uuid) -> Result<&mut AudioClip> {
+        self.audio_clips
+            .iter_mut()
+            .find(|clip| clip.id == id)
+            .ok_or_else(|| Error::NotFound(format!("audio clip {id}")))
     }
 
     /// These operations never silently close gaps or resolve overlapping clips.

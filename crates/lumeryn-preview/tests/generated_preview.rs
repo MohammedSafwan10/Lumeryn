@@ -137,6 +137,126 @@ fn reference(source: &Path, source_frame: u64) -> TestResult<Vec<u8>> {
     Ok(output.stdout)
 }
 
+fn wait_idle_generation(player: &PreviewPlayer, generation: u64) -> TestResult {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while player.status().generation != generation {
+        if Instant::now() > deadline {
+            return Err(format!(
+                "idle generation {generation} timed out: {:?}",
+                player.status()
+            )
+            .into());
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    Ok(())
+}
+
+fn assert_idle_cleared(player: &mut PreviewPlayer, revision: u64, generation: u64) {
+    let status = player.status();
+    assert_eq!(status.project_revision, revision);
+    assert_eq!(status.generation, generation);
+    assert!(!status.playing);
+    assert_eq!(status.position_frame, 0);
+    assert_eq!(status.total_frames, 0);
+    assert_eq!(status.decoded_frames, 0);
+    assert_eq!(status.dropped_frames, 0);
+    assert_eq!(status.buffered_frames, 0);
+    assert_eq!(status.decode_time_ms, 0.0);
+    assert_eq!(status.seek_latency_ms, 0.0);
+    assert_eq!(status.audio, AudioStatus::Disabled);
+    assert!(status.error.is_none(), "{:?}", status.error);
+    assert!(player.try_frame().is_none());
+}
+
+#[test]
+fn valid_empty_project_is_idle_without_tools_and_recovers_after_invalid_empty() -> TestResult {
+    let missing = MediaTools {
+        ffmpeg: "missing-lumeryn-empty-ffmpeg".into(),
+        ffprobe: "missing-lumeryn-empty-ffprobe".into(),
+        timeout: Duration::from_millis(10),
+    };
+    // Audio is enabled so success also proves no output-device startup is required.
+    let mut player = PreviewPlayer::new(missing, PreviewConfig::default())?;
+    let mut empty = Project::new("Clean agent project".into(), 1920, 1080, "30".parse()?)?;
+    empty.revision = 42;
+    let database = PathBuf::from("no-existing-empty-project-directory/project.lumeryn");
+    player.load(empty.clone(), database.clone())?;
+    wait_idle_generation(&player, 1)?;
+    assert_idle_cleared(&mut player, 42, 1);
+    player.play()?;
+    std::thread::sleep(Duration::from_millis(30));
+    assert_idle_cleared(&mut player, 42, 1);
+    let mut invalid = empty.clone();
+    invalid.revision = 43;
+    invalid.width = 3;
+    assert!(invalid.validate().is_err());
+    player.load(invalid, database.clone())?;
+    wait_idle_generation(&player, 2)?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while player.status().error.is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "invalid empty graph was accepted"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(player.status().project_revision, 43);
+    assert!(!player.status().playing);
+    assert!(player.try_frame().is_none());
+    empty.revision = 44;
+    player.load(empty, database)?;
+    wait_idle_generation(&player, 3)?;
+    assert_idle_cleared(&mut player, 44, 3);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_idle_cleared(&mut player, 44, 3);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires installed FFmpeg/FFprobe; populated preview cancellation and empty recovery"]
+fn populated_to_empty_cancels_decode_resets_metrics_and_reloads_without_stale_frames() -> TestResult
+{
+    let (directory, mut project) = fixture(FrameRate::new(30, 1)?)?;
+    project.revision = 7;
+    let mut player = PreviewPlayer::new(
+        tools(),
+        PreviewConfig {
+            audio: false,
+            ..Default::default()
+        },
+    )?;
+    let database = directory.path().join("project.lumeryn");
+    player.load(project.clone(), database.clone())?;
+    wait_frame(&mut player, 0)?;
+    player.play()?;
+    wait_frame(&mut player, 5)?;
+    assert!(player.status().decoded_frames > 0);
+    let mut empty = project.clone();
+    empty.revision = 8;
+    empty.clips.clear();
+    empty.validate()?;
+    player.load(empty.clone(), database.clone())?;
+    wait_idle_generation(&player, 2)?;
+    assert_idle_cleared(&mut player, 8, 2);
+    std::thread::sleep(Duration::from_millis(80));
+    assert_idle_cleared(&mut player, 8, 2);
+    project.revision = 9;
+    player.load(project.clone(), database.clone())?;
+    let frame = wait_frame(&mut player, 0)?;
+    assert_eq!(frame.generation, 3);
+    assert_eq!(frame.project_revision, 9);
+    // Cancel an outstanding plan build as well as a running decode session.
+    player.load(project, database.clone())?;
+    empty.revision = 10;
+    player.load(empty, database)?;
+    wait_idle_generation(&player, 5)?;
+    assert_idle_cleared(&mut player, 10, 5);
+    std::thread::sleep(Duration::from_millis(80));
+    assert_idle_cleared(&mut player, 10, 5);
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires installed FFmpeg/FFprobe; generates trusted fixtures"]
 fn exact_seek_step_contiguous_clip_frames_and_bounded_paused_queue() -> TestResult {

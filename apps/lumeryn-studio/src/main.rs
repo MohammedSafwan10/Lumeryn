@@ -16,6 +16,7 @@ pub enum CaptureState {
     Active,
     Export,
     Inspector,
+    Audio,
     Project,
     Tools,
     Empty,
@@ -44,6 +45,9 @@ pub struct Options {
     /// Exercise shared undo/redo and clipboard paths on the disposable smoke project.
     #[arg(long, requires = "smoke")]
     smoke_history: bool,
+    /// Verify native independent audio placement, editing and mixed export on disposable media.
+    #[arg(long, requires = "smoke")]
+    smoke_audio: bool,
     /// Capture an actual native UI state without editing the project.
     #[arg(long, requires = "artifact_dir", conflicts_with = "smoke")]
     capture_only: bool,

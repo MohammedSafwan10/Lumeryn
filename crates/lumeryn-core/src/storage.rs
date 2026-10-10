@@ -9,6 +9,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
 };
 use std::{
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -130,6 +131,49 @@ pub struct PreparedImports {
     project_path: PathBuf,
     commands: String,
     imports: Vec<Option<Media>>,
+    audio_proofs: Vec<Option<AudioProof>>,
+}
+
+#[derive(Clone)]
+struct AudioProof {
+    media_id: Uuid,
+    path: PathBuf,
+    digest: String,
+    size_bytes: u64,
+    samples: u64,
+}
+
+impl AudioProof {
+    fn apply(&self, project: &mut Project) -> Result<()> {
+        let media = project
+            .media
+            .iter_mut()
+            .find(|media| media.id == self.media_id)
+            .ok_or_else(|| Error::NotFound(format!("media {}", self.media_id)))?;
+        if media.path != self.path
+            || media.metadata.size_bytes != self.size_bytes
+            || media.metadata.blake3.as_deref() != Some(self.digest.as_str())
+        {
+            return Err(Error::Invalid(
+                "audio proof source identity changed before commit".into(),
+            ));
+        }
+        let audio = media
+            .metadata
+            .audio
+            .as_mut()
+            .ok_or_else(|| Error::Invalid("audio proof requires an audio stream".into()))?;
+        if audio
+            .canonical_samples_48k
+            .is_some_and(|samples| samples != self.samples)
+        {
+            return Err(Error::Invalid(
+                "audio proof sample count changed before commit".into(),
+            ));
+        }
+        audio.canonical_samples_48k = Some(self.samples);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -163,7 +207,7 @@ impl Store {
         let mut tx = store.connection.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::raw_sql("CREATE TABLE project (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL, revision INTEGER NOT NULL, snapshot TEXT NOT NULL); CREATE TABLE history (revision INTEGER PRIMARY KEY, commands TEXT NOT NULL, snapshot TEXT NOT NULL); CREATE TABLE receipts (key TEXT PRIMARY KEY, commands TEXT NOT NULL, revision INTEGER NOT NULL, object_ids TEXT NOT NULL);").execute(&mut *tx).await?;
         sqlx::query("INSERT INTO project VALUES (1, ?, 0, ?)")
-            .bind(i64::from(SCHEMA_VERSION))
+            .bind(i64::from(project.schema_version))
             .bind(serde_json::to_string(project)?)
             .execute(&mut *tx)
             .await?;
@@ -294,7 +338,11 @@ impl Store {
                 "prepared imports do not match project and batch".into(),
             ));
         }
-        let PreparedImports { imports, .. } = prepared;
+        let PreparedImports {
+            imports,
+            audio_proofs,
+            ..
+        } = prepared;
         if self.storage_version().await? != STORAGE_VERSION {
             return Err(Error::Unsupported(
                 "run project migrate before editing legacy storage".into(),
@@ -332,6 +380,11 @@ impl Store {
             ));
         }
         let mut project = checked_project(row)?;
+        if project.schema_version != SCHEMA_VERSION {
+            return Err(Error::Unsupported(
+                "run project migrate before editing legacy project schema".into(),
+            ));
+        }
         if let Some(expected) = expected_revision
             && project.revision != expected
         {
@@ -364,20 +417,36 @@ impl Store {
                 .await?;
             let restored =
                 historical_project(row.try_get::<&str, _>("snapshot")?, target, project.id)?;
+            if restored.schema_version != project.schema_version
+                || restored.audio_track_id != project.audio_track_id
+            {
+                return Err(Error::Invalid("history graph schema/audio track differs from current project; check or migrate project".into()));
+            }
             project = restored;
             object_ids.push(project.id);
         } else {
-            for (operation, imported) in batch.operations.iter().zip(imports) {
+            for ((operation, imported), proof) in
+                batch.operations.iter().zip(imports).zip(audio_proofs)
+            {
+                if let Some(proof) = proof {
+                    proof.apply(&mut project)?;
+                }
                 project.apply(operation, imported)?;
                 match operation {
                     Edit::Import { id, .. }
                     | Edit::AddClip { id, .. }
                     | Edit::InsertClip { id, .. }
+                    | Edit::AddAudioClip { id, .. }
                     | Edit::PasteClip { id, .. }
                     | Edit::DuplicateClip { id, .. } => object_ids.push(*id),
                     Edit::TrimClip { clip_id, .. }
                     | Edit::DeleteClip { clip_id, .. }
                     | Edit::ReorderClip { clip_id, .. } => object_ids.push(*clip_id),
+                    Edit::MoveAudioClip { clip_id, .. }
+                    | Edit::TrimAudioClip { clip_id, .. }
+                    | Edit::SetAudioRange { clip_id, .. }
+                    | Edit::SetAudioProperties { clip_id, .. }
+                    | Edit::DeleteAudioClip { clip_id } => object_ids.push(*clip_id),
                     Edit::RenameMedia { media_id, .. } | Edit::RemoveMedia { media_id } => {
                         object_ids.push(*media_id)
                     }
@@ -459,14 +528,17 @@ impl Store {
             .await?)
     }
 
-    /// Explicit upgrade of derived indexes; never silently migrate on read-only open.
+    /// Explicit upgrade of storage indexes and every persisted graph snapshot.
+    /// Commands, receipts and revisions retain their exact durable meaning and bytes.
     pub async fn migrate(&mut self) -> Result<serde_json::Value> {
-        self.inspect().await?;
+        let inspected = self.inspect().await?;
         let previous = self.storage_version().await?;
-        if previous == STORAGE_VERSION {
-            return Ok(serde_json::json!({"from":previous,"to":previous,"changed":false}));
+        if previous == STORAGE_VERSION && inspected.schema_version == SCHEMA_VERSION {
+            return Ok(
+                serde_json::json!({"from":previous,"to":previous,"graph_from":inspected.schema_version,"graph_to":inspected.schema_version,"changed":false}),
+            );
         }
-        if previous != 0 {
+        if !(0..=STORAGE_VERSION).contains(&previous) {
             return Err(Error::Unsupported(format!(
                 "storage migration from {previous}"
             )));
@@ -476,11 +548,7 @@ impl Store {
         let locked: i64 = sqlx::query_scalar("PRAGMA user_version")
             .fetch_one(&mut *tx)
             .await?;
-        if locked == STORAGE_VERSION {
-            tx.rollback().await?;
-            return Ok(serde_json::json!({"from":locked,"to":locked,"changed":false}));
-        }
-        if locked != 0 {
+        if !(0..=STORAGE_VERSION).contains(&locked) {
             return Err(Error::Unsupported(
                 "concurrent storage schema change".into(),
             ));
@@ -488,15 +556,109 @@ impl Store {
         let row = sqlx::query("SELECT schema_version, revision, snapshot FROM project WHERE id=1")
             .fetch_one(&mut *tx)
             .await?;
-        let project = checked_project(row)?;
-        sqlx::raw_sql(SEARCH_MIGRATION).execute(&mut *tx).await?;
+        let mut project = checked_project(row)?;
+        let graph_from = project.schema_version;
+        if locked == STORAGE_VERSION && graph_from == SCHEMA_VERSION {
+            tx.rollback().await?;
+            return Ok(
+                serde_json::json!({"from":locked,"to":locked,"graph_from":graph_from,"graph_to":graph_from,"changed":false}),
+            );
+        }
+        if graph_from == 1 {
+            // Bound memory before collecting all histories needed for collision-free identity.
+            let sizes = sqlx::query("SELECT count(*) AS records, coalesce(sum(length(CAST(snapshot AS BLOB))),0) AS bytes, coalesce(sum(length(CAST(commands AS BLOB))),0) AS command_bytes FROM history").fetch_one(&mut *tx).await?;
+            if sizes.try_get::<i64, _>("records")? > MAX_HISTORY_RECORDS as i64
+                || sizes.try_get::<i64, _>("bytes")? > 128 * 1024 * 1024
+                || sizes.try_get::<i64, _>("command_bytes")? > MAX_HISTORY_COMMAND_BYTES as i64
+            {
+                return Err(Error::Invalid("graph migration exceeds 100000 snapshots or 128 MiB; staged migration required".into()));
+            }
+            let rows =
+                sqlx::query("SELECT revision, commands, snapshot FROM history ORDER BY revision")
+                    .fetch_all(&mut *tx)
+                    .await?;
+            if rows.len() as u64 != project.revision + 1 {
+                return Err(Error::Invalid("migration history is not contiguous".into()));
+            }
+            let mut previous = Vec::with_capacity(rows.len());
+            let mut ids = HashSet::new();
+            let mut logical = LogicalHistory::default();
+            for (index, row) in rows.iter().enumerate() {
+                if row.try_get::<i64, _>("revision")? != index as i64 {
+                    return Err(Error::Invalid("migration history revision mismatch".into()));
+                }
+                let snapshot = historical_project(
+                    row.try_get::<&str, _>("snapshot")?,
+                    index as u64,
+                    project.id,
+                )?;
+                if snapshot.schema_version != 1 {
+                    return Err(Error::Invalid(
+                        "migration history has mixed graph schemas".into(),
+                    ));
+                }
+                let commands: Vec<Edit> =
+                    serde_json::from_str(row.try_get::<&str, _>("commands")?)?;
+                logical.push(index as u64, &commands)?;
+                if matches!(commands.as_slice(), [Edit::Undo {}] | [Edit::Redo {}]) {
+                    let target = logical.state()?.current_logical_revision;
+                    let mut expected: Project = previous
+                        .get(target as usize)
+                        .cloned()
+                        .ok_or_else(|| Error::Invalid("migration undo target is missing".into()))?;
+                    expected.revision = index as u64;
+                    if serde_json::to_value(&expected)? != serde_json::to_value(&snapshot)? {
+                        return Err(Error::Invalid(
+                            "migration undo snapshot differs from target".into(),
+                        ));
+                    }
+                }
+                ids.extend([snapshot.id, snapshot.video_track_id]);
+                ids.extend(snapshot.media.iter().map(|media| media.id));
+                ids.extend(snapshot.clips.iter().map(|clip| clip.id));
+                previous.push(snapshot);
+            }
+            if previous.last().map(serde_json::to_value).transpose()?
+                != Some(serde_json::to_value(&project)?)
+            {
+                return Err(Error::Invalid(
+                    "migration current snapshot disagrees with history".into(),
+                ));
+            }
+            let audio_track = (0..100)
+                .map(|_| Uuid::new_v4())
+                .find(|id| !ids.contains(id))
+                .ok_or_else(|| {
+                    Error::Invalid("cannot allocate unique audio track identity".into())
+                })?;
+            for snapshot in &mut previous {
+                snapshot.schema_version = SCHEMA_VERSION;
+                snapshot.audio_track_id = Some(audio_track);
+                snapshot.validate()?;
+                sqlx::query("UPDATE history SET snapshot=? WHERE revision=?")
+                    .bind(serde_json::to_string(snapshot)?)
+                    .bind(snapshot.revision as i64)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            project.schema_version = SCHEMA_VERSION;
+            project.audio_track_id = Some(audio_track);
+            project.validate()?;
+            sqlx::query("UPDATE project SET schema_version=?, snapshot=? WHERE id=1")
+                .bind(i64::from(SCHEMA_VERSION))
+                .bind(serde_json::to_string(&project)?)
+                .execute(&mut *tx)
+                .await?;
+        }
+        if locked == 0 {
+            sqlx::raw_sql(SEARCH_MIGRATION).execute(&mut *tx).await?;
+        }
         rebuild_search(&mut tx, &project).await?;
         tx.commit().await?;
         Ok(
-            serde_json::json!({"from":previous,"to":STORAGE_VERSION,"changed":true,"project_revision":project.revision}),
+            serde_json::json!({"from":locked,"to":STORAGE_VERSION,"graph_from":graph_from,"graph_to":project.schema_version,"changed":true,"project_revision":project.revision}),
         )
     }
-
     async fn make_writable(&mut self) -> Result<()> {
         if !self.writable {
             let writable = Self::connect(&self.path, true).await?;
@@ -573,6 +735,13 @@ impl Store {
                 index as u64,
                 project.id,
             )?;
+            if previous.schema_version != project.schema_version
+                || previous.audio_track_id != project.audio_track_id
+            {
+                return Err(Error::Invalid(
+                    "history graph schema/audio track differs from current project".into(),
+                ));
+            }
             let operations: Vec<Edit> = serde_json::from_str(row.try_get::<&str, _>("commands")?)?;
             if row.try_get::<i64, _>("revision")? != index as i64
                 || previous.revision != index as u64
@@ -718,7 +887,8 @@ impl Store {
 }
 
 fn checked_project(row: sqlx::sqlite::SqliteRow) -> Result<Project> {
-    if row.try_get::<i64, _>("schema_version")? != i64::from(SCHEMA_VERSION) {
+    let version = row.try_get::<i64, _>("schema_version")?;
+    if !(1..=i64::from(SCHEMA_VERSION)).contains(&version) {
         return Err(Error::Unsupported("database project schema".into()));
     }
     let snapshot: &str = row.try_get("snapshot")?;
@@ -726,6 +896,11 @@ fn checked_project(row: sqlx::sqlite::SqliteRow) -> Result<Project> {
         return Err(Error::Invalid("project snapshot exceeds 16 MiB".into()));
     }
     let project: Project = serde_json::from_str(snapshot)?;
+    if i64::from(project.schema_version) != version {
+        return Err(Error::Invalid(
+            "snapshot schema disagrees with database".into(),
+        ));
+    }
     if row.try_get::<i64, _>("revision")?
         != i64::try_from(project.revision)
             .map_err(|_| Error::Invalid("revision overflow".into()))?
@@ -873,10 +1048,73 @@ pub async fn prepare_imports(
         });
     }
 
+    let mut audio_proofs = Vec::with_capacity(batch.operations.len());
+    let mut proofs = HashMap::<Uuid, AudioProof>::new();
+    let current = if batch
+        .operations
+        .iter()
+        .any(|operation| matches!(operation, Edit::AddAudioClip { .. }))
+    {
+        Some(Store::open(&project_path).await?.inspect().await?)
+    } else {
+        None
+    };
+    for operation in &batch.operations {
+        let proof = if let Edit::AddAudioClip { media_id, .. } = operation {
+            if let Some(proof) = proofs.get(media_id) {
+                Some(proof.clone())
+            } else {
+                let media = imports
+                    .iter()
+                    .flatten()
+                    .find(|media| media.id == *media_id)
+                    .or_else(|| {
+                        current.as_ref().and_then(|project| {
+                            project.media.iter().find(|media| media.id == *media_id)
+                        })
+                    })
+                    .ok_or_else(|| Error::NotFound(format!("media {media_id}")))?;
+                let audio = media.metadata.audio.as_ref().ok_or_else(|| {
+                    Error::Unsupported("independent placement requires an audio source".into())
+                })?;
+                if audio.canonical_samples_48k.is_some() {
+                    None
+                } else {
+                    let digest = media.metadata.blake3.clone().ok_or_else(|| {
+                        Error::Invalid(
+                            "audio sample proof requires source hash; reimport media".into(),
+                        )
+                    })?;
+                    let path = if media.path.is_absolute() {
+                        media.path.clone()
+                    } else {
+                        project_path
+                            .parent()
+                            .ok_or_else(|| Error::Invalid("missing project parent".into()))?
+                            .join(&media.path)
+                    };
+                    let samples = tools.canonical_audio_samples(&path, &digest).await?;
+                    let proof = AudioProof {
+                        media_id: *media_id,
+                        path: media.path.clone(),
+                        digest,
+                        size_bytes: media.metadata.size_bytes,
+                        samples,
+                    };
+                    proofs.insert(*media_id, proof.clone());
+                    Some(proof)
+                }
+            }
+        } else {
+            None
+        };
+        audio_proofs.push(proof);
+    }
     Ok(PreparedImports {
         project_path,
         commands,
         imports,
+        audio_proofs,
     })
 }
 

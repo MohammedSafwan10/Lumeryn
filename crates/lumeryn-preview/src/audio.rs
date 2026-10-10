@@ -51,40 +51,57 @@ enum Source {
 }
 
 struct Input {
-    path: PathBuf,
-    digest: String,
-    source_seconds: String,
-    duration: String,
-    audio: bool,
-    pad: bool,
+    args: Vec<std::ffi::OsString>,
+    sources: Vec<(PathBuf, String)>,
 }
 impl Source {
-    fn inputs(self) -> Vec<Input> {
+    fn inputs(self, sample_rate: u32, channels: u16) -> Result<Vec<Input>> {
+        let device_args = || {
+            [
+                "-ar".into(),
+                sample_rate.to_string().into(),
+                "-ac".into(),
+                channels.to_string().into(),
+                "-f".into(),
+                "f32le".into(),
+                "pipe:1".into(),
+            ]
+        };
         match self {
-            Self::Timeline(plan, start) => plan
-                .segments
-                .iter()
-                .filter(|segment| segment.at + segment.frames > start)
-                .map(|segment| {
-                    let offset = start.saturating_sub(segment.at);
-                    Input {
-                        path: segment.path.clone(),
-                        digest: segment.digest.clone(),
-                        source_seconds: plan.rate.seconds(segment.source_in + offset),
-                        duration: plan.rate.seconds(segment.frames - offset),
-                        audio: segment.audio,
-                        pad: true,
-                    }
-                })
-                .collect(),
-            Self::Audition(path, digest) => vec![Input {
-                path,
-                digest,
-                source_seconds: "0".into(),
-                duration: "30".into(),
-                audio: true,
-                pad: false,
-            }],
+            Self::Timeline(plan, start) => {
+                if let Some(audio_plan) = plan.audio_plan {
+                    Ok(vec![Input {
+                        args: audio_plan.pcm_args_for_device(start, sample_rate, channels)?,
+                        sources: audio_plan.output_sources(),
+                    }])
+                } else {
+                    Ok(plan.segments.iter()
+                        .filter(|segment| segment.at + segment.frames > start)
+                        .map(|segment| {
+                            let offset = start.saturating_sub(segment.at);
+                            let duration = plan.rate.seconds(segment.frames - offset);
+                            let mut args = base_args();
+                            if segment.audio {
+                                args.extend(["-threads".into(), "2".into(), "-protocol_whitelist".into(), "file".into(), "-i".into(), segment.path.as_os_str().to_owned(), "-map".into(), "0:a:0".into(), "-vn".into(), "-af".into(),
+                                    format!("atrim=start={}:duration={duration},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration={duration}", plan.rate.seconds(segment.source_in + offset)).into()]);
+                            } else {
+                                args.extend(["-f".into(), "lavfi".into(), "-i".into(), "anullsrc=r=48000:cl=stereo".into(), "-t".into(), duration.into()]);
+                            }
+                            args.extend(device_args());
+                            Input { args, sources: vec![(segment.path.clone(), segment.digest.clone())] }
+                        }).collect())
+                }
+            }
+            Self::Audition(path, digest) => {
+                let mut args = base_args();
+                args.extend(["-threads".into(), "2".into(), "-protocol_whitelist".into(), "file".into(), "-i".into(), path.as_os_str().to_owned(), "-map".into(), "0:a:0".into(), "-vn".into(), "-af".into(),
+                    "atrim=start=0:duration=30,asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo".into()]);
+                args.extend(device_args());
+                Ok(vec![Input {
+                    args,
+                    sources: vec![(path, digest)],
+                }])
+            }
         }
     }
 }
@@ -339,36 +356,15 @@ async fn decode(
     mut cancelled: watch::Receiver<u64>,
 ) {
     let work = async {
-        for segment in source.inputs() {
-            if content_hash(&segment.path).await? != segment.digest {
-                return Err(Error::Invalid(
-                    "audio preview source changed; reimport media".into(),
-                ));
+        for input in source.inputs(shared.rate, shared.channels)? {
+            for (path, digest) in &input.sources {
+                if &content_hash(path).await? != digest {
+                    return Err(Error::Invalid(
+                        "audio preview source changed; reimport media".into(),
+                    ));
+                }
             }
-            let duration = segment.duration;
-            let mut args = base_args();
-            if segment.audio {
-                args.extend(["-threads".into(), "2".into(), "-protocol_whitelist".into(), "file".into(), "-i".into(), segment.path.as_os_str().to_owned(), "-map".into(), "0:a:0".into(), "-vn".into(), "-af".into(),
-                    format!("atrim=start={}:duration={duration},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo{}", segment.source_seconds,if segment.pad {format!(",apad,atrim=duration={duration}")} else {String::new()}).into()]);
-            } else {
-                args.extend([
-                    "-f".into(),
-                    "lavfi".into(),
-                    "-i".into(),
-                    "anullsrc=r=48000:cl=stereo".into(),
-                    "-t".into(),
-                    duration.into(),
-                ]);
-            }
-            args.extend([
-                "-ar".into(),
-                shared.rate.to_string().into(),
-                "-ac".into(),
-                shared.channels.to_string().into(),
-                "-f".into(),
-                "f32le".into(),
-                "pipe:1".into(),
-            ]);
+            let args = input.args;
             let mut pipe = WorkerPipe::start(&tools, &args)?;
             let mut bytes = [0_u8; 4096];
             let mut remainder = Vec::with_capacity(3);
@@ -416,10 +412,12 @@ async fn decode(
             tokio::time::timeout(tools.timeout, pipe.finish())
                 .await
                 .map_err(|_| Error::Timeout)??;
-            if content_hash(&segment.path).await? != segment.digest {
-                return Err(Error::Invalid(
-                    "audio preview source changed during decoding".into(),
-                ));
+            for (path, digest) in &input.sources {
+                if &content_hash(path).await? != digest {
+                    return Err(Error::Invalid(
+                        "audio preview source changed during decoding".into(),
+                    ));
+                }
             }
         }
         Ok::<_, Error>(())
@@ -440,6 +438,192 @@ mod tests {
         assert!(
             matches!(output_device(None),Err(Error::Unsupported(message)) if message=="no native audio output device")
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FFmpeg; bounded shared mix, final device conversion and cancellation without a device"]
+    async fn timeline_shared_mix_stream_matches_canonical_device_pcm() -> Result<()> {
+        use lumeryn_core::audio_plan::{
+            AudioPlan, AudioSegment, AudioSource, CANONICAL_DECODE_FILTER,
+        };
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("music.wav");
+        let tools = MediaTools::default();
+        tools
+            .run(
+                &tools.ffmpeg,
+                &[
+                    "-v".into(),
+                    "error".into(),
+                    "-nostdin".into(),
+                    "-n".into(),
+                    "-f".into(),
+                    "lavfi".into(),
+                    "-i".into(),
+                    "sine=frequency=880:sample_rate=44100:duration=2".into(),
+                    "-c:a".into(),
+                    "pcm_f32le".into(),
+                    path.as_os_str().to_owned(),
+                ],
+            )
+            .await?;
+        let digest = content_hash(&path).await?;
+        let proof = tools
+            .run(
+                &tools.ffmpeg,
+                &[
+                    "-v".into(),
+                    "error".into(),
+                    "-nostdin".into(),
+                    "-i".into(),
+                    path.as_os_str().to_owned(),
+                    "-map".into(),
+                    "0:a:0".into(),
+                    "-af".into(),
+                    CANONICAL_DECODE_FILTER.into(),
+                    "-f".into(),
+                    "f32le".into(),
+                    "pipe:1".into(),
+                ],
+            )
+            .await?;
+        assert_eq!(proof.len(), 96_000 * 8);
+        let rate = FrameRate::new(30, 1)?;
+        let audio_plan = AudioPlan::new(
+            rate,
+            60,
+            vec![AudioSource {
+                path: path.clone(),
+                digest: digest.clone(),
+                canonical_samples: Some(proof.len() as u64 / 8),
+            }],
+            vec![AudioSegment {
+                source: 0,
+                at_frame: 15,
+                source_in_sample: 2_000,
+                duration_frames: 30,
+                gain_millidecibels: -6_000,
+                muted: false,
+            }],
+        )?;
+        let expected = tools
+            .run(
+                &tools.ffmpeg,
+                &audio_plan.pcm_args_for_device(20, 44_100, 1)?,
+            )
+            .await?;
+        let plan = Plan {
+            segments: Vec::new(),
+            rate,
+            total: 60,
+            revision: 1,
+            width: 128,
+            height: 72,
+            audio_plan: Some(audio_plan),
+        };
+        let shared = Arc::new(Shared {
+            buffer: Mutex::new(Buffer {
+                samples: VecDeque::with_capacity(11_025),
+                submitted: 0,
+                decoded: 0,
+                timing: None,
+                error: None,
+            }),
+            playing: AtomicBool::new(false),
+            underruns: AtomicU64::new(0),
+            rate: 44_100,
+            channels: 1,
+            capacity: 11_025,
+            finished: AtomicBool::new(false),
+            consumed: Notify::new(),
+            volume: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+        });
+        let (cancel, receiver) = watch::channel(0);
+        let task = tokio::spawn(decode(
+            Source::Timeline(plan.clone(), 20),
+            tools.clone(),
+            Arc::clone(&shared),
+            receiver,
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                {
+                    let buffer = shared
+                        .buffer
+                        .lock()
+                        .map_err(|_| Error::Media("test queue poisoned".into()))?;
+                    if let Some(error) = &buffer.error {
+                        return Err(Error::Media(error.clone()));
+                    }
+                    if buffer.samples.len() == shared.capacity {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok::<_, Error>(())
+        })
+        .await
+        .map_err(|_| Error::Timeout)??;
+        assert!(!shared.finished.load(Ordering::Acquire));
+        cancel.send_replace(1);
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .map_err(|_| Error::Timeout)?
+            .map_err(|error| Error::Media(error.to_string()))?;
+        {
+            let mut buffer = shared
+                .buffer
+                .lock()
+                .map_err(|_| Error::Media("test queue poisoned".into()))?;
+            buffer.samples.clear();
+            buffer.decoded = 0;
+        }
+        let (_cancel, receiver) = watch::channel(0);
+        let task = tokio::spawn(decode(
+            Source::Timeline(plan, 20),
+            tools,
+            Arc::clone(&shared),
+            receiver,
+        ));
+        let mut actual = Vec::<f32>::new();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                {
+                    let mut buffer = shared
+                        .buffer
+                        .lock()
+                        .map_err(|_| Error::Media("test queue poisoned".into()))?;
+                    if let Some(error) = &buffer.error {
+                        return Err(Error::Media(error.clone()));
+                    }
+                    assert!(buffer.samples.len() <= shared.capacity);
+                    actual.extend(buffer.samples.drain(..));
+                }
+                shared.consumed.notify_one();
+                if shared.finished.load(Ordering::Acquire) {
+                    let mut buffer = shared
+                        .buffer
+                        .lock()
+                        .map_err(|_| Error::Media("test queue poisoned".into()))?;
+                    actual.extend(buffer.samples.drain(..));
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            Ok::<_, Error>(())
+        })
+        .await
+        .map_err(|_| Error::Timeout)??;
+        task.await
+            .map_err(|error| Error::Media(error.to_string()))?;
+        let actual = actual
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        assert_eq!(content_hash(&path).await?, digest);
+        Ok(())
     }
 
     #[tokio::test]

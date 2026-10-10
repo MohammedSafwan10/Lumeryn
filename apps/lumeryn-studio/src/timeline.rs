@@ -27,12 +27,22 @@ pub enum Action {
         before: Option<Uuid>,
     },
     RejectDrop(&'static str),
+    DropAudio {
+        payload: DragPayload,
+        at_frame: u64,
+    },
+    TrimAudio {
+        clip: Uuid,
+        duration: u64,
+    },
+    DeleteAudio(Uuid),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragSource {
     Media(Uuid),
     Clip(Uuid),
+    AudioClip { clip: Uuid, grab_offset: u64 },
 }
 
 /// Captured at drag start. Never rebase a gesture onto a later committed graph.
@@ -73,12 +83,42 @@ fn reorder_changes(project: &Project, moving: Uuid, before: Option<Uuid>) -> boo
         && before != Some(moving)
 }
 
+fn snap_audio_frame(project: &Project, frame: u64, playhead: u64, px: f32) -> u64 {
+    std::iter::once(0)
+        .chain(std::iter::once(playhead))
+        .chain(project.clips.iter().flat_map(|clip| {
+            [
+                clip.at_frame,
+                clip.at_frame.saturating_add(clip.duration_frames),
+            ]
+        }))
+        .filter(|candidate| candidate.abs_diff(frame) as f32 * px <= 8.0)
+        .min_by_key(|candidate| candidate.abs_diff(frame))
+        .unwrap_or(frame)
+}
+
 #[derive(Debug)]
 pub struct Timeline {
     pub zoom: f32,
     pub fit: bool,
-    trim: Option<(Uuid, u64)>,
+    trim: Option<TrimGesture>,
+    audio_trim: Option<TrimGesture>,
     pub visible_clips: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TrimGesture {
+    clip: Uuid,
+    project: Uuid,
+    revision: u64,
+    epoch: u64,
+    duration: u64,
+}
+
+impl TrimGesture {
+    fn matches(self, project: &Project, epoch: u64) -> bool {
+        self.project == project.id && self.revision == project.revision && self.epoch == epoch
+    }
 }
 
 impl Default for Timeline {
@@ -87,6 +127,7 @@ impl Default for Timeline {
             zoom: 1.0,
             fit: true,
             trim: None,
+            audio_trim: None,
             visible_clips: 0,
         }
     }
@@ -155,10 +196,43 @@ struct Lanes {
     ruler: Rect,
     video: Rect,
     audio: Rect,
+    music: Option<Rect>,
 }
 
 impl Lanes {
+    #[cfg(test)]
     fn new(rect: Rect, origin: f32) -> Self {
+        Self::with_audio(rect, origin, false)
+    }
+    fn with_audio(rect: Rect, origin: f32, independent: bool) -> Self {
+        if independent {
+            let ruler_height = if rect.height() < 184.0 { 35.0 } else { 43.0 };
+            let body = (rect.height() - ruler_height - 21.0).max(0.0);
+            let video_height = body * 0.48;
+            let linked_height = body * 0.22;
+            let ruler = Rect::from_min_max(
+                pos2(origin, rect.top()),
+                pos2(rect.right(), rect.top() + ruler_height),
+            );
+            let video = Rect::from_min_max(
+                pos2(origin, ruler.bottom() + 4.0),
+                pos2(rect.right(), ruler.bottom() + 4.0 + video_height),
+            );
+            let audio = Rect::from_min_max(
+                pos2(origin, video.bottom() + 4.0),
+                pos2(rect.right(), video.bottom() + 4.0 + linked_height),
+            );
+            let music = Rect::from_min_max(
+                pos2(origin, audio.bottom() + 4.0),
+                pos2(rect.right(), rect.bottom() - 5.0),
+            );
+            return Self {
+                ruler,
+                video,
+                audio,
+                music: Some(music),
+            };
+        }
         let ruler_height = if rect.height() < 184.0 { 35.0 } else { 43.0 };
         let body_height = (rect.height() - ruler_height - 17.0).max(0.0);
         let audio_maximum = 56.0_f32.min((body_height - 50.0).max(0.0));
@@ -180,11 +254,16 @@ impl Lanes {
             ruler,
             video,
             audio,
+            music: None,
         }
     }
 }
 
 impl Timeline {
+    pub fn cancel_gesture(&mut self) {
+        self.trim = None;
+        self.audio_trim = None;
+    }
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -198,8 +277,17 @@ impl Timeline {
             epoch,
             editable,
         } = view;
-        if !ui.input(|input| input.focused) {
+        if !editable || ui.input(|input| !input.focused || input.key_pressed(egui::Key::Escape)) {
             egui::DragAndDrop::clear_payload(ui.ctx());
+            self.cancel_gesture();
+        }
+        if self
+            .audio_trim
+            .is_some_and(|trim| !trim.matches(project, epoch))
+        {
+            self.audio_trim = None;
+        }
+        if self.trim.is_some_and(|trim| !trim.matches(project, epoch)) {
             self.trim = None;
         }
         let mut actions = Vec::new();
@@ -273,14 +361,23 @@ impl Timeline {
             let origin = rect.left() + header;
             let first = (((viewport.left() - origin) / pixels_per_frame).max(0.0).floor() as u64).min(total);
             let last = ((((viewport.right() - origin) / pixels_per_frame).max(0.0).ceil() as u64) + 1).min(total.saturating_add(1));
-            let Lanes { ruler, video, audio } = Lanes::new(rect, origin);
+            let Lanes { ruler, video, audio, music } = Lanes::with_audio(rect, origin,project.audio_track_id.is_some());
             let painter = ui.painter();
             painter.rect_filled(rect, 0.0, design::BACKGROUND);
             painter.line_segment([pos2(rect.left(), ruler.bottom()+1.0), pos2(rect.right(), ruler.bottom()+1.0)], Stroke::new(1.0, design::BORDER));
             painter.line_segment([pos2(rect.left(), video.bottom()+4.0), pos2(rect.right(), video.bottom()+4.0)], Stroke::new(1.0, design::BORDER));
             painter.rect_filled(video, 3.0, design::PANEL);
             painter.rect_filled(audio, 3.0, design::PANEL);
+            if let Some(music)=music {
+                painter.rect_filled(music,3.0,design::PANEL);
+
+                if project.audio_clips.is_empty() {painter.with_clip_rect(music.intersect(viewport)).text(music.center(),Align2::CENTER_CENTER,"Drag music or voiceover here",FontId::proportional(12.0),design::MUTED);}
+            }
             painter.rect_filled(Rect::from_min_max(canvas_viewport.left_top(),pos2(viewport.left(),rect.bottom())),0.0,design::BACKGROUND);
+            if let Some(music)=music {
+                let label=Rect::from_min_max(pos2(canvas_viewport.left(),music.top()),pos2(viewport.left()-6.0,music.bottom())).intersect(canvas_viewport);
+                painter.with_clip_rect(label).text(pos2(canvas_viewport.left()+20.0,music.center().y),Align2::LEFT_CENTER,"Audio 1",FontId::proportional(13.0),design::TEXT);
+            }
             // Headers describe the supported single-video-track graph; source audio is linked, not a fake independent track.
             let video_header = painter.with_clip_rect(Rect::from_min_max(pos2(canvas_viewport.left(),video.top()),pos2(viewport.left()-6.0,video.bottom())).intersect(canvas_viewport));
             video_header.text(pos2(canvas_viewport.left()+20.0, video.center().y-8.0), Align2::LEFT_CENTER, "Video 1", FontId::proportional(14.0), design::TEXT);
@@ -308,7 +405,7 @@ impl Timeline {
             if (ruler_response.clicked() || ruler_response.dragged()) && let Some(pointer) = ruler_response.interact_pointer_pos() { actions.push(Action::Seek(frame_at(pointer.x, origin, pixels_per_frame, total))); }
             let mut painted_dense_columns = std::collections::HashSet::new();
             for clip in project.clips.iter().filter(|clip| visible(clip, first, last)) {
-                let duration = self.trim.filter(|(id, _)| *id == clip.id).map_or(clip.duration_frames, |(_, duration)| duration);
+                let duration = self.trim.filter(|trim| trim.clip == clip.id).map_or(clip.duration_frames, |trim| trim.duration);
                 let left = origin + clip.at_frame as f32 * pixels_per_frame;
                 let right = origin + clip.at_frame.saturating_add(duration) as f32 * pixels_per_frame;
                 let is_selected = selected == Some(clip.id);
@@ -359,9 +456,10 @@ impl Timeline {
                 if block.width() > 10.0 {
                     let edge = Rect::from_min_max(pos2(block.right()-8.0, block.top()), block.right_bottom());
                     let handle = ui.interact(edge.intersect(viewport), ui.id().with((clip.id,"trim")), Sense::drag());
-                    if handle.hovered() || handle.dragged() { ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal); ui.painter().rect_filled(edge.shrink2(vec2(2.0,14.0)), 2.0, design::ACCENT); }
-                    if handle.dragged() && let Some(pointer) = handle.interact_pointer_pos() { self.trim = Some((clip.id, ((pointer.x-origin)/pixels_per_frame-clip.at_frame as f32).round().max(1.0) as u64)); }
-                    if handle.drag_stopped() && let Some((id,duration)) = self.trim.take() { actions.push(Action::Trim {clip:id,duration}); }
+                    if handle.hovered() || handle.dragged_by(egui::PointerButton::Primary) { ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal); ui.painter().rect_filled(edge.shrink2(vec2(2.0,14.0)), 2.0, design::ACCENT); }
+                    if editable && handle.drag_started_by(egui::PointerButton::Primary) {self.trim=Some(TrimGesture {clip:clip.id,project:project.id,revision:project.revision,epoch,duration:clip.duration_frames});}
+                    if editable && handle.dragged_by(egui::PointerButton::Primary) && let Some(trim)=self.trim.as_mut().filter(|trim|trim.clip==clip.id && trim.matches(project,epoch)) && let Some(pointer)=handle.interact_pointer_pos() {trim.duration=((pointer.x-origin)/pixels_per_frame-clip.at_frame as f32).round().max(1.0) as u64;}
+                    if handle.drag_stopped() && let Some(trim)=self.trim.take() && editable && trim.matches(project,epoch) && handle.drag_stopped_by(egui::PointerButton::Primary) {actions.push(Action::Trim {clip:trim.clip,duration:trim.duration});}
                 }
                 let audio_block = Rect::from_min_max(pos2(left,audio.top()+1.0),pos2(right.max(left+1.0),audio.bottom()-1.0));
                 let audio_painter = ui.painter().with_clip_rect(audio_block.intersect(viewport));
@@ -404,6 +502,56 @@ impl Timeline {
                     }
                 } else if audio_block.width()>90.0 { audio_painter.text(audio_block.center(),Align2::CENTER_CENTER,"No source audio",FontId::proportional(11.0),design::MUTED); }
             }
+            if let Some(music)=music {
+                let mut audio_clips:Vec<_>=project.audio_clips.iter().filter(|clip|clip.at_frame<last && clip.at_frame.saturating_add(clip.duration_frames)>first).collect();
+                audio_clips.sort_by_key(|clip|(selected==Some(clip.id),clip.at_frame));
+                for clip in audio_clips {
+                    let duration=self.audio_trim.filter(|trim|trim.clip==clip.id).map_or(clip.duration_frames,|trim|trim.duration);
+                    let block=Rect::from_min_max(pos2(origin+clip.at_frame as f32*pixels_per_frame,music.top()+1.0),pos2(origin+clip.at_frame.saturating_add(duration) as f32*pixels_per_frame,music.bottom()-1.0));
+                    let clipped=block.intersect(viewport);
+                    let paint=ui.painter().with_clip_rect(clipped);
+                    paint.rect_filled(block,3.0,if clip.muted {Color32::from_rgb(36,42,50)} else {Color32::from_rgb(28,58,76)});
+                    if let Some(wave)=assets.waveform(clip.media_id) {
+                        let source_seconds=clip.source_in_sample as f64/48000.0;
+                        let duration_seconds=duration as f64/f64::from(fps);
+                        for column in 0..(clipped.width()/3.0).ceil().max(0.0) as usize {
+                            let x=clipped.left()+column as f32*3.0;
+                            let fraction=((x-block.left())/block.width().max(1.0)).clamp(0.0,1.0);
+                            let bin=((source_seconds+f64::from(fraction)*duration_seconds)/wave.duration_seconds*wave.peaks.len() as f64) as usize;
+                            if let Some(peak)=wave.peaks.get(bin) {
+                                let height=(peak/wave.max_peak.max(0.001)).clamp(0.0,1.0)*block.height()*0.30;
+                                paint.line_segment([pos2(x,block.center().y-height),pos2(x,block.center().y+height)],Stroke::new(1.0,Color32::from_rgb(77,135,171)));
+                            }
+                        }
+                    }
+                    let name=project.media.iter().find(|media|media.id==clip.media_id).map_or_else(||"Audio".into(),|media|media.display_name());
+                    paint.rect_filled(Rect::from_min_max(pos2(block.left(),block.bottom()-18.0),block.right_bottom()),0.0,Color32::from_black_alpha(125));
+                    paint.text(pos2(block.left()+7.0,block.bottom()-9.0),Align2::LEFT_CENTER,format!("{name}{}",if clip.muted {" · muted"} else {""}),FontId::proportional(11.0),design::TEXT);
+                    paint.rect_stroke(block,3.0,Stroke::new(if selected==Some(clip.id) {2.0} else {1.0},if selected==Some(clip.id) {design::ACCENT} else {design::BORDER}),StrokeKind::Inside);
+                    let body=Rect::from_min_max(block.left_top(),pos2((block.right()-8.0).max(block.left()),block.bottom())).intersect(viewport);
+                    let response=ui.interact(body,ui.id().with((clip.id,"audio-body")),Sense::click_and_drag()).on_hover_text("Drag independently · right edge trims · overlaps mix additively");
+                    if response.clicked() {actions.push(Action::Select(clip.id));}
+                    if editable && response.drag_started_by(egui::PointerButton::Primary) && let Some(pointer)=ui.input(|input|input.pointer.press_origin()) {
+                        let grab_offset=((pointer.x-block.left())/pixels_per_frame).round().max(0.0) as u64;
+                        response.dnd_set_drag_payload(DragPayload {project:project.id,revision:project.revision,epoch,source:DragSource::AudioClip {clip:clip.id,grab_offset}});
+                    }
+                    response.context_menu(|ui|{ if ui.button("Delete audio").clicked() {actions.push(Action::DeleteAudio(clip.id));ui.close();} });
+                    if block.width()>10.0 {
+                        let edge=Rect::from_min_max(pos2(block.right()-8.0,block.top()),block.right_bottom()).intersect(viewport);
+                        let handle=ui.interact(edge,ui.id().with((clip.id,"audio-trim")),Sense::drag());
+                        if editable && handle.drag_started_by(egui::PointerButton::Primary) {
+                            self.audio_trim=Some(TrimGesture {clip:clip.id,project:project.id,revision:project.revision,epoch,duration:clip.duration_frames});
+                        }
+                        if editable && handle.dragged_by(egui::PointerButton::Primary) && let Some(trim)=self.audio_trim.as_mut().filter(|trim|trim.clip==clip.id && trim.matches(project,epoch)) && let Some(pointer)=handle.interact_pointer_pos() {
+                            trim.duration=((pointer.x-origin)/pixels_per_frame-clip.at_frame as f32).round().max(1.0) as u64;
+                        }
+                        if handle.hovered() || handle.dragged_by(egui::PointerButton::Primary) {ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);}
+                        if handle.drag_stopped() && let Some(trim)=self.audio_trim.take() && editable && trim.matches(project,epoch) && handle.drag_stopped_by(egui::PointerButton::Primary) {
+                            actions.push(Action::TrimAudio {clip:trim.clip,duration:trim.duration});
+                        }
+                    }
+                }
+            }
             if total == 0 {
                 ui.painter().with_clip_rect(video.intersect(viewport)).text(video.center(),Align2::CENTER_CENTER,"Drag a video here to start",FontId::proportional(14.0),design::MUTED);
             }
@@ -411,20 +559,39 @@ impl Timeline {
                 let released = ui.input(|input| input.pointer.primary_released());
                 let pointer = ui.input(|input| if released {input.pointer.interact_pos()} else {input.pointer.hover_pos()});
                 if let Some(pointer) = pointer {
+                    let music_zone=music.map(|rect|rect.intersect(viewport));
+                    if let Some(zone)=music_zone && zone.contains(pointer) && ui.ctx().layer_id_at(pointer)==Some(ui.layer_id()) {
+                        let stale=payload.project!=project.id || payload.revision!=project.revision || payload.epoch!=epoch;
+                        let accepted=match payload.source {DragSource::Media(id)=>project.media.iter().any(|media|media.id==id && media.metadata.audio.is_some()),DragSource::AudioClip {clip,..}=>project.audio_clips.iter().any(|item|item.id==clip),DragSource::Clip(_)=>false};
+                        let raw=((pointer.x-origin)/pixels_per_frame).round().max(0.0) as u64;
+                        let offset=match payload.source {DragSource::AudioClip {grab_offset,..}=>grab_offset,_=>0};
+                        let maximum=match payload.source {DragSource::AudioClip {clip,..}=>project.audio_clips.iter().find(|item|item.id==clip).map_or(0,|item|total.saturating_sub(item.duration_frames)),_=>total.saturating_sub(1)};
+                        let candidate=raw.saturating_sub(offset).min(maximum);
+                        let at_frame=snap_audio_frame(project,candidate,playhead,pixels_per_frame).min(maximum);
+                        if !editable || stale || !accepted || total==0 {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+                            if released {egui::DragAndDrop::clear_payload(ui.ctx());actions.push(Action::RejectDrop(if stale {"The project changed during this drag. Drag again."} else {"Add a video first, then drop an audio source on Audio 1."}));}
+                        } else {
+                            let x=origin+at_frame as f32*pixels_per_frame;
+                            ui.painter().with_clip_rect(zone).line_segment([pos2(x,zone.top()),pos2(x,zone.bottom())],Stroke::new(3.0,design::ACCENT));
+                            if released {egui::DragAndDrop::clear_payload(ui.ctx());actions.push(Action::DropAudio {payload:*payload,at_frame});}
+                        }
+                        // Music rectangles are disjoint from video and linked audio.
+                    }
                     let video_zone = video.intersect(viewport);
                     let linked_zone = audio.intersect(viewport);
                     let over_video = video_zone.contains(pointer);
                     let over_linked = linked_zone.contains(pointer);
                     if (over_video || over_linked) && ui.ctx().layer_id_at(pointer) == Some(ui.layer_id()) {
                         let stale = payload.project != project.id || payload.revision != project.revision || payload.epoch != epoch;
-                        let playable = match payload.source { DragSource::Media(id) => project.media.iter().any(|media| media.id == id && media.metadata.video.is_some()), DragSource::Clip(id) => project.clips.iter().any(|clip| clip.id == id) };
-                        let error = if stale {Some("The project changed during this drag. Drag again from the current project.")} else if !editable {Some("Wait for the current edit or connection before dropping.")} else if !playable {Some("Independent audio placement is not supported yet. Source audio moves with its video.")} else if over_linked && matches!(payload.source,DragSource::Media(_)) {Some("Drop video on the Video 1 lane. This waveform lane is linked source audio.")} else {None};
+                        let playable = match payload.source { DragSource::Media(id) => project.media.iter().any(|media| media.id == id && media.metadata.video.is_some()), DragSource::Clip(id) => project.clips.iter().any(|clip| clip.id == id), DragSource::AudioClip {..}=>false };
+                        let error = if stale {Some("The project changed during this drag. Drag again from the current project.")} else if !editable {Some("Wait for the current edit or connection before dropping.")} else if !playable {Some("Drop audio on Audio 1; upgrade legacy projects from the Project panel.")} else if over_linked && matches!(payload.source,DragSource::Media(_)) {Some("Drop video on the Video 1 lane. This waveform lane is linked source audio.")} else {None};
                         if let Some(error) = error {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
                             ui.painter().rect_stroke(if over_video {video_zone} else {linked_zone},3.0,Stroke::new(2.0,design::WARNING),StrokeKind::Inside);
                             if released { egui::DragAndDrop::clear_payload(ui.ctx()); actions.push(Action::RejectDrop(error)); }
                         } else {
-                            let moving = match payload.source {DragSource::Clip(id)=>Some(id),DragSource::Media(_)=>None};
+                            let moving = match payload.source {DragSource::Clip(id)=>Some(id),_=>None};
                             let before = insertion_target(project,f64::from((pointer.x-origin)/pixels_per_frame),moving);
                             let frame = before.and_then(|id|project.clips.iter().find(|clip|clip.id==id)).map_or(total,|clip|clip.at_frame);
                             let x = (origin+frame as f32*pixels_per_frame).clamp(viewport.left()+2.0,viewport.right()-2.0);
@@ -462,19 +629,32 @@ impl Timeline {
             && pointer.x >= scroll.inner_rect.left() + header
             && ui.ctx().layer_id_at(pointer) == Some(ui.layer_id())
         {
-            let lanes = Lanes::new(scroll.inner_rect, scroll.inner_rect.left() + header);
+            let lanes = Lanes::with_audio(
+                scroll.inner_rect,
+                scroll.inner_rect.left() + header,
+                project.audio_track_id.is_some(),
+            );
             let over_video = lanes.video.contains(pointer);
             let over_linked = lanes.audio.contains(pointer);
             let accepts = match payload.source {
                 DragSource::Media(id) => {
-                    over_video
+                    (over_video
                         && project
                             .media
                             .iter()
-                            .any(|media| media.id == id && media.metadata.video.is_some())
+                            .any(|media| media.id == id && media.metadata.video.is_some()))
+                        || (lanes.music.is_some_and(|music| music.contains(pointer))
+                            && project
+                                .media
+                                .iter()
+                                .any(|media| media.id == id && media.metadata.audio.is_some()))
                 }
                 DragSource::Clip(id) => {
                     (over_video || over_linked) && project.clips.iter().any(|clip| clip.id == id)
+                }
+                DragSource::AudioClip { clip, .. } => {
+                    lanes.music.is_some_and(|music| music.contains(pointer))
+                        && project.audio_clips.iter().any(|item| item.id == clip)
                 }
             };
             let edge = 36.0;
@@ -550,8 +730,12 @@ mod tests {
         timeline: Timeline,
         source: Rect,
         lane: Rect,
+        linked: Rect,
+        music: Option<Rect>,
+        pixels_per_frame: f32,
         time: f64,
         focused: bool,
+        editable: bool,
         scroll_id: Option<egui::Id>,
     }
     impl Gesture {
@@ -563,8 +747,12 @@ mod tests {
                 timeline: Timeline::default(),
                 source: Rect::NOTHING,
                 lane: Rect::NOTHING,
+                linked: Rect::NOTHING,
+                music: None,
+                pixels_per_frame: 0.0,
                 time: 0.0,
                 focused: true,
+                editable: true,
                 scroll_id: None,
             }
         }
@@ -591,14 +779,26 @@ mod tests {
                     });
                 }
                 ui.add_space(10.0);
-                // Toolbar is32px +7px space, then the 43px ruler and4px gap.
-                self.lane = Rect::from_min_size(
-                    pos2(
-                        ui.cursor().left() + 150.0,
-                        ui.cursor().top() + 32.0 + 7.0 + 43.0 + 4.0,
+                let canvas = Rect::from_min_size(
+                    pos2(ui.cursor().left(), ui.cursor().top() + 39.0),
+                    vec2(
+                        ui.available_width(),
+                        (ui.available_height() - 39.0).clamp(0.0, 204.0),
                     ),
-                    vec2(828.0, 65.0),
                 );
+                let lanes = Lanes::with_audio(
+                    canvas,
+                    canvas.left() + 150.0,
+                    project.audio_track_id.is_some(),
+                );
+                self.lane = lanes.video;
+                self.linked = lanes.audio;
+                self.music = lanes.music;
+                self.pixels_per_frame = if self.timeline.fit {
+                    (ui.available_width() - 172.0) / total_frames(project).max(1) as f32
+                } else {
+                    2.0 * self.timeline.zoom
+                };
                 self.scroll_id = Some(ui.make_persistent_id(egui::IdSalt::new((
                     "studio-timeline-scroll",
                     project.id,
@@ -612,7 +812,7 @@ mod tests {
                         selected: None,
                         playhead: 0,
                         epoch,
-                        editable: true,
+                        editable: self.editable,
                     },
                 );
             });
@@ -833,7 +1033,7 @@ mod tests {
         let mut gesture = Gesture::new();
         gesture.pass(&project, 1, vec![]);
         let from = pos2(
-            gesture.lane.left() + gesture.lane.width() / 3.0 - 3.0,
+            gesture.lane.left() + 30.0 * gesture.pixels_per_frame - 3.0,
             gesture.lane.center().y,
         );
         start_pointer(&mut gesture, &project, from, egui::PointerButton::Primary);
@@ -858,6 +1058,128 @@ mod tests {
             matches!(actions.as_slice(), [Action::Trim { clip, duration }] if *clip == project.clips[0].id && *duration < 30)
         );
         assert!(gesture.timeline.trim.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn actual_video_trim_secondary_button_never_starts_or_commits() -> lumeryn_core::Result<()> {
+        let project = drag_project()?;
+        let mut gesture = Gesture::new();
+        gesture.pass(&project, 1, vec![]);
+        let edge = pos2(
+            gesture.lane.left() + 30.0 * gesture.pixels_per_frame - 3.0,
+            gesture.lane.center().y,
+        );
+        start_pointer(&mut gesture, &project, edge, egui::PointerButton::Secondary);
+        assert!(gesture.timeline.trim.is_none());
+        let destination = edge - vec2(50.0, 0.0);
+        assert!(
+            gesture
+                .pass(&project, 1, vec![egui::Event::PointerMoved(destination)])
+                .is_empty()
+        );
+        assert!(
+            gesture
+                .pass(
+                    &project,
+                    1,
+                    vec![Gesture::button(
+                        destination,
+                        egui::PointerButton::Secondary,
+                        false
+                    )]
+                )
+                .is_empty()
+        );
+        assert!(gesture.timeline.trim.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn actual_video_trim_cancels_on_escape_disabled_focus_overlay_or_stale_identity()
+    -> lumeryn_core::Result<()> {
+        for reason in [
+            "escape", "disabled", "focus", "overlay", "revision", "epoch", "project",
+        ] {
+            let mut project = drag_project()?;
+            let mut gesture = Gesture::new();
+            gesture.pass(&project, 1, vec![]);
+            let edge = pos2(
+                gesture.lane.left() + 30.0 * gesture.pixels_per_frame - 3.0,
+                gesture.lane.center().y,
+            );
+            start_pointer(&mut gesture, &project, edge, egui::PointerButton::Primary);
+            assert!(gesture.timeline.trim.is_some(), "{reason}");
+            let destination = edge - vec2(50.0, 0.0);
+            let mut epoch = 1;
+            let events = match reason {
+                "escape" => vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                "disabled" => {
+                    gesture.editable = false;
+                    vec![]
+                }
+                "focus" => {
+                    gesture.focused = false;
+                    vec![]
+                }
+                "overlay" => {
+                    gesture.timeline.cancel_gesture();
+                    vec![]
+                }
+                "revision" => {
+                    project.revision += 1;
+                    vec![]
+                }
+                "epoch" => {
+                    epoch = 2;
+                    vec![]
+                }
+                "project" => {
+                    project.id = Uuid::new_v4();
+                    vec![]
+                }
+                _ => {
+                    return Err(lumeryn_core::Error::Invalid(
+                        "Unexpected test cancellation".into(),
+                    ));
+                }
+            };
+            assert!(gesture.pass(&project, epoch, events).is_empty(), "{reason}");
+            assert!(gesture.timeline.trim.is_none(), "{reason}");
+            gesture.editable = true;
+            gesture.focused = true;
+            assert!(
+                gesture
+                    .pass(
+                        &project,
+                        epoch,
+                        vec![egui::Event::PointerMoved(destination)]
+                    )
+                    .is_empty(),
+                "{reason}"
+            );
+            assert!(
+                gesture
+                    .pass(
+                        &project,
+                        epoch,
+                        vec![Gesture::button(
+                            destination,
+                            egui::PointerButton::Primary,
+                            false
+                        )]
+                    )
+                    .is_empty(),
+                "{reason}"
+            );
+            assert!(gesture.timeline.trim.is_none(), "{reason}");
+        }
         Ok(())
     }
 
@@ -993,7 +1315,9 @@ mod tests {
         let mut project = drag_project()?;
         project.clips.clear();
         project.media[0].metadata.video = None;
+        project.media[0].metadata.blake3 = Some("a".repeat(64));
         project.media[0].metadata.audio = Some(lumeryn_core::media::Audio {
+            canonical_samples_48k: None,
             codec: "pcm_s16le".into(),
             sample_rate: 48_000,
             channels: 2,
@@ -1009,7 +1333,7 @@ mod tests {
                 .is_empty()
         );
         assert!(
-            matches!(gesture.pass(&project, 1, vec![Gesture::button(destination, egui::PointerButton::Primary, false)]).as_slice(), [Action::RejectDrop(message)] if message.contains("Independent audio"))
+            matches!(gesture.pass(&project, 1, vec![Gesture::button(destination, egui::PointerButton::Primary, false)]).as_slice(), [Action::RejectDrop(message)] if message.contains("Audio 1"))
         );
         assert!(!egui::DragAndDrop::has_any_payload(&gesture.ctx));
         Ok(())
@@ -1019,6 +1343,7 @@ mod tests {
     fn actual_linked_audio_drag_works_before_waveform_is_available() -> lumeryn_core::Result<()> {
         let mut project = drag_project()?;
         project.media[0].metadata.audio = Some(lumeryn_core::media::Audio {
+            canonical_samples_48k: None,
             codec: "pcm_s16le".into(),
             sample_rate: 48_000,
             channels: 2,
@@ -1027,7 +1352,7 @@ mod tests {
         project.validate()?;
         let mut gesture = Gesture::new();
         gesture.pass(&project, 1, vec![]);
-        let from = pos2(gesture.lane.left() + 40.0, gesture.lane.top() + 124.0);
+        let from = pos2(gesture.lane.left() + 40.0, gesture.linked.center().y);
         start_pointer(&mut gesture, &project, from, egui::PointerButton::Primary);
         assert!(
             matches!(egui::DragAndDrop::payload::<DragPayload>(&gesture.ctx).map(|payload| payload.source), Some(DragSource::Clip(id)) if id == project.clips[0].id)
@@ -1040,6 +1365,303 @@ mod tests {
         );
         assert!(
             matches!(gesture.pass(&project, 1, vec![Gesture::button(destination, egui::PointerButton::Primary, false)]).as_slice(), [Action::Drop { payload: DragPayload { source: DragSource::Clip(id), .. }, before: None }] if *id == project.clips[0].id)
+        );
+        Ok(())
+    }
+
+    fn independent_audio_fixture() -> lumeryn_core::Result<Project> {
+        let mut project = drag_project()?;
+        project.media[0].metadata.audio = Some(lumeryn_core::media::Audio {
+            canonical_samples_48k: Some(144000),
+            codec: "pcm_s16le".into(),
+            sample_rate: 48000,
+            channels: 2,
+            start_time_micros: 0,
+        });
+        project.media[0].metadata.video = None;
+        project.media[0].metadata.blake3 = Some("a".repeat(64));
+        // Keep the visual sequence on its original video source; add a separate audio asset.
+        let audio = project.media[0].clone();
+        let video = drag_project()?.media.remove(0);
+        project.media[0] = video;
+        let video_id = project.media[0].id;
+        for clip in &mut project.clips {
+            clip.media_id = video_id;
+        }
+        project.media.insert(0, audio);
+        project.validate()?;
+        Ok(project)
+    }
+
+    #[test]
+    fn actual_audio_media_drop_and_independent_body_move_and_trim()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut project = independent_audio_fixture()?;
+        let mut gesture = Gesture::new();
+        gesture.start_media(&project);
+        let music = gesture.music.ok_or("missing audio lane")?;
+        let destination = pos2(
+            gesture.lane.left() + 30.0 * gesture.pixels_per_frame,
+            music.center().y,
+        );
+        assert!(
+            gesture
+                .pass(&project, 1, vec![egui::Event::PointerMoved(destination)])
+                .is_empty()
+        );
+        assert!(
+            matches!(gesture.pass(&project,1,vec![Gesture::button(destination,egui::PointerButton::Primary,false)]).as_slice(),[Action::DropAudio {payload:DragPayload {source:DragSource::Media(id),..},at_frame:30}] if *id==project.media[0].id)
+        );
+        let id = Uuid::new_v4();
+        project.audio_clips.push(lumeryn_core::model::AudioClip {
+            id,
+            media_id: project.media[0].id,
+            track_id: project.audio_track_id.ok_or("missing track")?,
+            at_frame: 30,
+            source_in_sample: 0,
+            duration_frames: 30,
+            gain_millidecibels: 0,
+            muted: false,
+        });
+        project.validate()?;
+        gesture.pass(&project, 1, vec![]);
+        let from = pos2(
+            gesture.lane.left() + 40.0 * gesture.pixels_per_frame,
+            music.center().y,
+        );
+        start_pointer(&mut gesture, &project, from, egui::PointerButton::Primary);
+        assert!(
+            matches!(egui::DragAndDrop::payload::<DragPayload>(&gesture.ctx).map(|payload|payload.source),Some(DragSource::AudioClip {clip,grab_offset:10}) if clip==id)
+        );
+        let to = pos2(
+            gesture.lane.left() + 70.0 * gesture.pixels_per_frame,
+            from.y,
+        );
+        gesture.pass(&project, 1, vec![egui::Event::PointerMoved(to)]);
+        assert!(matches!(
+            gesture
+                .pass(
+                    &project,
+                    1,
+                    vec![Gesture::button(to, egui::PointerButton::Primary, false)]
+                )
+                .as_slice(),
+            [Action::DropAudio { at_frame: 60, .. }]
+        ));
+        let edge = pos2(
+            gesture.lane.left() + 60.0 * gesture.pixels_per_frame - 3.0,
+            music.center().y,
+        );
+        start_pointer(&mut gesture, &project, edge, egui::PointerButton::Primary);
+        assert!(!egui::DragAndDrop::has_any_payload(&gesture.ctx));
+        let shortened = pos2(
+            gesture.lane.left() + 50.0 * gesture.pixels_per_frame,
+            edge.y,
+        );
+        gesture.pass(&project, 1, vec![egui::Event::PointerMoved(shortened)]);
+        assert!(
+            matches!(gesture.pass(&project,1,vec![Gesture::button(shortened,egui::PointerButton::Primary,false)]).as_slice(),[Action::TrimAudio {clip,duration:20}] if *clip==id)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn audio_lanes_fit_and_snapping_retains_integer_frames() -> lumeryn_core::Result<()> {
+        for height in [131.0, 150.0, 204.0] {
+            let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, height));
+            let lanes = Lanes::with_audio(rect, 150.0, true);
+            let music = lanes
+                .music
+                .ok_or_else(|| lumeryn_core::Error::Invalid("Missing music lane".into()))?;
+            assert!(lanes.video.height() > 30.0);
+            assert!(lanes.audio.height() > 15.0);
+            assert!(music.height() > 20.0);
+            assert!(rect.contains_rect(music));
+            assert!(lanes.audio.bottom() < music.top());
+        }
+        let project = drag_project()?;
+        assert_eq!(snap_audio_frame(&project, 29, 0, 3.0), 30);
+        assert_eq!(snap_audio_frame(&project, 26, 0, 3.0), 26);
+        Ok(())
+    }
+
+    fn audio_trim_project() -> lumeryn_core::Result<Project> {
+        let mut project = independent_audio_fixture()?;
+        project.audio_clips.push(lumeryn_core::model::AudioClip {
+            id: Uuid::new_v4(),
+            media_id: project.media[0].id,
+            track_id: project
+                .audio_track_id
+                .ok_or_else(|| lumeryn_core::Error::Invalid("Missing audio track".into()))?,
+            at_frame: 30,
+            source_in_sample: 0,
+            duration_frames: 30,
+            gain_millidecibels: 0,
+            muted: false,
+        });
+        project.validate()?;
+        Ok(project)
+    }
+
+    fn audio_trim_edge(
+        gesture: &mut Gesture,
+        project: &Project,
+    ) -> lumeryn_core::Result<egui::Pos2> {
+        gesture.pass(project, 1, vec![]);
+        Ok(pos2(
+            gesture.lane.left() + 60.0 * gesture.pixels_per_frame - 3.0,
+            gesture
+                .music
+                .ok_or_else(|| lumeryn_core::Error::Invalid("Missing audio lane".into()))?
+                .center()
+                .y,
+        ))
+    }
+
+    #[test]
+    fn actual_audio_trim_secondary_button_never_starts_or_commits() -> lumeryn_core::Result<()> {
+        let project = audio_trim_project()?;
+        let mut gesture = Gesture::new();
+        let edge = audio_trim_edge(&mut gesture, &project)?;
+        start_pointer(&mut gesture, &project, edge, egui::PointerButton::Secondary);
+        assert!(gesture.timeline.audio_trim.is_none());
+        let destination = edge - vec2(50.0, 0.0);
+        assert!(
+            gesture
+                .pass(&project, 1, vec![egui::Event::PointerMoved(destination)])
+                .is_empty()
+        );
+        assert!(
+            gesture
+                .pass(
+                    &project,
+                    1,
+                    vec![Gesture::button(
+                        destination,
+                        egui::PointerButton::Secondary,
+                        false
+                    )]
+                )
+                .is_empty()
+        );
+        assert!(gesture.timeline.audio_trim.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn actual_audio_trim_cancels_on_escape_disabled_focus_overlay_or_stale_identity()
+    -> lumeryn_core::Result<()> {
+        for reason in [
+            "escape", "disabled", "focus", "overlay", "revision", "epoch", "project",
+        ] {
+            let mut project = audio_trim_project()?;
+            let mut gesture = Gesture::new();
+            let edge = audio_trim_edge(&mut gesture, &project)?;
+            start_pointer(&mut gesture, &project, edge, egui::PointerButton::Primary);
+            assert!(gesture.timeline.audio_trim.is_some(), "{reason}");
+            let destination = edge - vec2(50.0, 0.0);
+            let mut epoch = 1;
+            let events = match reason {
+                "escape" => vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                "disabled" => {
+                    gesture.editable = false;
+                    vec![]
+                }
+                "focus" => {
+                    gesture.focused = false;
+                    vec![]
+                }
+                "overlay" => {
+                    gesture.timeline.cancel_gesture();
+                    vec![]
+                }
+                "revision" => {
+                    project.revision += 1;
+                    vec![]
+                }
+                "epoch" => {
+                    epoch = 2;
+                    vec![]
+                }
+                "project" => {
+                    project.id = Uuid::new_v4();
+                    vec![]
+                }
+                _ => {
+                    return Err(lumeryn_core::Error::Invalid(
+                        "Unexpected test cancellation".into(),
+                    ));
+                }
+            };
+            assert!(gesture.pass(&project, epoch, events).is_empty(), "{reason}");
+            assert!(gesture.timeline.audio_trim.is_none(), "{reason}");
+            gesture.editable = true;
+            gesture.focused = true;
+            assert!(
+                gesture
+                    .pass(
+                        &project,
+                        epoch,
+                        vec![egui::Event::PointerMoved(destination)]
+                    )
+                    .is_empty(),
+                "{reason}"
+            );
+            assert!(
+                gesture
+                    .pass(
+                        &project,
+                        epoch,
+                        vec![Gesture::button(
+                            destination,
+                            egui::PointerButton::Primary,
+                            false
+                        )]
+                    )
+                    .is_empty(),
+                "{reason}"
+            );
+            assert!(gesture.timeline.audio_trim.is_none(), "{reason}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn actual_audio_body_move_clamps_whole_clip_inside_visual_duration() -> lumeryn_core::Result<()>
+    {
+        let project = audio_trim_project()?;
+        let mut gesture = Gesture::new();
+        let edge = audio_trim_edge(&mut gesture, &project)?;
+        let from = pos2(
+            gesture.lane.left() + 40.0 * gesture.pixels_per_frame,
+            edge.y,
+        );
+        start_pointer(&mut gesture, &project, from, egui::PointerButton::Primary);
+        let to = pos2(gesture.lane.right() - 2.0, from.y);
+        assert!(
+            gesture
+                .pass(&project, 1, vec![egui::Event::PointerMoved(to)])
+                .is_empty()
+        );
+        assert!(matches!(
+            gesture
+                .pass(
+                    &project,
+                    1,
+                    vec![Gesture::button(to, egui::PointerButton::Primary, false)]
+                )
+                .as_slice(),
+            [Action::DropAudio { at_frame: 60, .. }]
+        ));
+        assert_eq!(
+            60 + project.audio_clips[0].duration_frames,
+            total_frames(&project)
         );
         Ok(())
     }

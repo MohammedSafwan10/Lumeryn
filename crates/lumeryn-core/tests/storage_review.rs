@@ -2,7 +2,7 @@
 use lumeryn_core::{Batch, Edit, Error, MediaTools, Project, Store};
 use lumeryn_core::{
     media::{Metadata, Video},
-    model::Media,
+    model::{Media, SCHEMA_VERSION},
 };
 use sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::{error::Error as StdError, fs, path::Path};
@@ -62,10 +62,14 @@ async fn legacy_project(path: &Path, project: &Project) -> TestResult {
 }
 
 #[tokio::test]
-async fn legacy_migration_populates_search_once_without_editing_project_or_history() -> TestResult {
+async fn legacy_migration_populates_search_once_and_preserves_edit_semantics_and_history()
+-> TestResult {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("legacy.lumeryn");
-    let project = indexed_fixture()?;
+    let mut project = indexed_fixture()?;
+    project.schema_version = 1;
+    project.audio_track_id = None;
+    project.audio_clips.clear();
     legacy_project(&path, &project).await?;
     let mut store = Store::open(&path).await?;
     assert_eq!(store.storage_version().await?, 0);
@@ -74,13 +78,31 @@ async fn legacy_migration_populates_search_once_without_editing_project_or_histo
         Err(Error::Unsupported(_))
     ));
     let history = store.history().await?;
-    assert_eq!(store.migrate().await?["changed"], true);
+    let migration = store.migrate().await?;
+    assert_eq!(migration["changed"], true);
+    assert_eq!(migration["graph_from"], 1);
+    assert_eq!(migration["graph_to"], SCHEMA_VERSION);
     assert_eq!(store.storage_version().await?, 1);
+    let migrated = store.inspect().await?;
+    assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+    assert!(migrated.audio_track_id.is_some());
+    assert!(migrated.audio_clips.is_empty());
+    project.schema_version = SCHEMA_VERSION;
+    project.audio_track_id = migrated.audio_track_id;
     assert_eq!(
         serde_json::to_value(store.inspect().await?)?,
         serde_json::to_value(&project)?
     );
     assert_eq!(store.history().await?, history);
+    let mut conn = connection(&path).await?;
+    let historical: String = sqlx::query_scalar("SELECT snapshot FROM history WHERE revision=0")
+        .fetch_one(&mut conn)
+        .await?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&historical)?,
+        serde_json::to_value(&project)?
+    );
+    conn.close().await?;
     assert_eq!(store.search("source", 10).await?.len(), 1);
     assert_eq!(store.migrate().await?["changed"], false);
     assert_eq!(store.search("source", 10).await?.len(), 1);
@@ -92,12 +114,19 @@ async fn legacy_migration_populates_search_once_without_editing_project_or_histo
 async fn failed_migration_rolls_back_version_and_keeps_legacy_graph() -> TestResult {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("collision.lumeryn");
-    let project = indexed_fixture()?;
+    let mut project = indexed_fixture()?;
+    project.schema_version = 1;
+    project.audio_track_id = None;
+    project.audio_clips.clear();
     legacy_project(&path, &project).await?;
     let mut conn = connection(&path).await?;
     sqlx::raw_sql("CREATE TABLE search_index (sentinel TEXT); INSERT INTO search_index VALUES ('preserve me');").execute(&mut conn).await?;
     let original_tables: Vec<String> =
         sqlx::query_scalar("SELECT name FROM sqlite_master ORDER BY name")
+            .fetch_all(&mut conn)
+            .await?;
+    let original_history: Vec<(i64, String, String)> =
+        sqlx::query_as("SELECT revision, commands, snapshot FROM history ORDER BY revision")
             .fetch_all(&mut conn)
             .await?;
     let mut store = Store::open(&path).await?;
@@ -108,6 +137,11 @@ async fn failed_migration_rolls_back_version_and_keeps_legacy_graph() -> TestRes
         serde_json::to_value(&project)?
     );
     assert_eq!(store.history().await?.len(), 1);
+    let actual_history: Vec<(i64, String, String)> =
+        sqlx::query_as("SELECT revision, commands, snapshot FROM history ORDER BY revision")
+            .fetch_all(&mut conn)
+            .await?;
+    assert_eq!(actual_history, original_history);
     assert_eq!(
         sqlx::query_scalar::<_, Vec<u8>>("SELECT CAST(sentinel AS BLOB) FROM search_index")
             .fetch_one(&mut conn)
@@ -451,7 +485,11 @@ async fn schema_and_revision_tampering_after_open_cannot_commit_an_edit() -> Tes
             .await?;
         assert_eq!(
             row.try_get::<i64, _>("schema_version")?,
-            if tamper_schema { 99 } else { 1 }
+            if tamper_schema {
+                99
+            } else {
+                i64::from(SCHEMA_VERSION)
+            }
         );
         assert_eq!(
             row.try_get::<i64, _>("revision")?,

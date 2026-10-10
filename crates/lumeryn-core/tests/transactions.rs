@@ -202,7 +202,7 @@ async fn rejects_existing_invalid_and_future_schema_projects() -> Result<()> {
         Store::create(&path, &project).await,
         Err(Error::Exists(_))
     ));
-    project.schema_version = 2;
+    project.schema_version = 99;
     assert!(matches!(project.validate(), Err(Error::Unsupported(_))));
     assert!(Project::new("bad".into(), 319, 180, "30".parse()?).is_err());
     let mut connection = <sqlx::SqliteConnection as sqlx::Connection>::connect_with(

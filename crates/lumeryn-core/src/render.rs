@@ -1,5 +1,6 @@
 use crate::{
     Error, MediaTools, Project, Result,
+    audio_plan::AudioPlan,
     media::{content_hash, local_file},
 };
 use serde::Serialize;
@@ -117,6 +118,13 @@ where
     .collect::<Vec<_>>();
     let mut filters = Vec::new();
     let mut source_digests = Vec::new();
+    // Keep the established video-only evaluator stable. Independent audio activates
+    // the shared canonical mix also consumed by native playback.
+    let audio_plan = if project.audio_clips.is_empty() {
+        None
+    } else {
+        Some(AudioPlan::from_project(project, database).await?)
+    };
     for (index, clip) in clips.iter().enumerate() {
         if clip.at_frame != frames {
             return Err(Error::Unsupported(
@@ -190,19 +198,31 @@ where
         let end = clip.source_in_frame + clip.duration_frames;
         filters.push(format!("[{index}:v:0]trim=start_frame={}:end_frame={end},setpts=PTS-STARTPTS,scale={canvas_width}:{canvas_height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={canvas_width}:{canvas_height}:(ow-iw)/2:(oh-ih)/2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{index}]", clip.source_in_frame));
         let duration = project.frame_rate.seconds(clip.duration_frames);
+        if audio_plan.is_some() {
+            continue;
+        }
         if media.metadata.audio.is_some() {
             filters.push(format!("[{index}:a:0]atrim=start={}:duration={duration},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration={duration}[a{index}]", project.frame_rate.seconds(clip.source_in_frame)));
         } else {
             filters.push(format!("anullsrc=r=48000:cl=stereo,atrim=duration={duration},asetpts=PTS-STARTPTS[a{index}]"));
         }
     }
-    let inputs = (0..clips.len())
-        .map(|index| format!("[v{index}][a{index}]"))
-        .collect::<String>();
-    filters.push(format!(
-        "{inputs}concat=n={}:v=1:a=1[vcat][acat]",
-        clips.len()
-    ));
+    if let Some(plan) = &audio_plan {
+        let inputs = (0..clips.len())
+            .map(|index| format!("[v{index}]"))
+            .collect::<String>();
+        filters.push(format!("{inputs}concat=n={}:v=1:a=0[vcat]", clips.len()));
+        args.extend(plan.input_args());
+        filters.push(plan.filter_program(clips.len(), 0)?.filters);
+    } else {
+        let inputs = (0..clips.len())
+            .map(|index| format!("[v{index}][a{index}]"))
+            .collect::<String>();
+        filters.push(format!(
+            "{inputs}concat=n={}:v=1:a=1[vcat][acat]",
+            clips.len()
+        ));
+    }
     let rendered_frames = options::output_frames(frames, project.frame_rate, frame_rate)?;
     let duration = frame_rate.seconds(rendered_frames);
     // Convert presentation rate once after evaluating original source-frame cuts. Pad at most
@@ -210,8 +230,13 @@ where
     let mut video_filter = String::new();
     video_filter.push_str(&format!("settb=expr={}/{},setpts=N,fps=fps={frame_rate}:start_time=0:round=up:eof_action=pass,tpad=stop_mode=clone:stop_duration=1,trim=end_frame={rendered_frames},setpts=N/({frame_rate}*TB)", project.frame_rate.denominator(), project.frame_rate.numerator()));
     filters.push(format!("[vcat]{video_filter}[vout]"));
+    let audio_label = if audio_plan.is_some() {
+        "lumeryn_audio_output"
+    } else {
+        "acat"
+    };
     filters.push(format!(
-        "[acat]apad,atrim=duration={duration},asetpts=PTS-STARTPTS[aout]"
+        "[{audio_label}]apad,atrim=duration={duration},asetpts=PTS-STARTPTS[aout]"
     ));
     progress(RenderStage::EncoderProbe).await;
     let mut selected =
@@ -277,6 +302,9 @@ where
                 "source changed during export; output rejected".into(),
             ));
         }
+    }
+    if let Some(plan) = &audio_plan {
+        plan.verify_sources().await?;
     }
     let metadata = tools.probe(temporary.path()).await?;
     let video = metadata

@@ -1,5 +1,5 @@
 # Opens the real native window and modifies only freshly generated disposable projects.
-param([switch]$SkipBuild, [switch]$Uhd, [switch]$Portrait, [switch]$History)
+param([switch]$SkipBuild, [switch]$Uhd, [switch]$Portrait, [switch]$History, [switch]$Audio)
 $ErrorActionPreference = 'Stop'
 # Honor isolated Cargo output so acceptance never replaces a running user editor.
 $lumerynTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR, (Split-Path $PSScriptRoot -Parent)) } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'target' }
@@ -45,6 +45,11 @@ try {
     $nativeDemo = (& (Join-Path $PSScriptRoot 'demo.ps1') -Motion -SkipBuild | Out-String) | ConvertFrom-Json
     $nativeDirectory = Join-Path $nativeRoot ('.lumeryn-scratch/studio-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $nativeDirectory | Out-Null
+    if ($Audio) {
+        $nativeFfmpeg = if ($env:LUMERYN_FFMPEG) { $env:LUMERYN_FFMPEG } else { 'ffmpeg' }
+        & $nativeFfmpeg -hide_banner -loglevel error -nostdin -n -f lavfi -i 'sine=frequency=880:sample_rate=48000:duration=2' -ac 2 -c:a pcm_s16le (Join-Path $nativeDirectory 'voiceover.wav')
+        if ($LASTEXITCODE -ne 0) { throw 'Disposable native audio fixture generation failed' }
+    }
     if ($Portrait) {
         $portraitBefore = (& $nativeCli project inspect --project $nativeDemo.project | ConvertFrom-Json).result
         if ($LASTEXITCODE -ne 0) { throw 'Portrait fixture inspection failed' }
@@ -57,6 +62,7 @@ try {
     $nativeArguments = @('--smoke','--project',('"' + $nativeDemo.project + '"'),'--artifact-dir',('"' + $nativeDirectory + '"'))
     if ($Uhd) { $nativeArguments += '--smoke-uhd' }
     if ($History) { $nativeArguments += '--smoke-history' }
+    if ($Audio) { $nativeArguments += '--smoke-audio' }
     $nativeWatch = [Diagnostics.Stopwatch]::StartNew()
     $nativeProcess = Start-Process -FilePath (Join-Path $lumerynTarget 'debug/lumeryn-studio.exe') -ArgumentList $nativeArguments -WindowStyle Normal -PassThru -RedirectStandardError (Join-Path $nativeDirectory 'stderr.log') -RedirectStandardOutput (Join-Path $nativeDirectory 'stdout.log')
     $nativeSamples = [Collections.Generic.List[object]]::new()
@@ -91,6 +97,8 @@ try {
     if ($nativeProcess.ExitCode -ne 0 -or -not $nativeReport.passed) { throw ('Native smoke failed; inspect ' + $nativeDirectory) }
     if ($History -and (-not $nativeReport.history_clipboard_acceptance -or @($nativeReport.checks | Where-Object check -eq 'native_shared_history_step').Count -ne 12)) { throw 'Twelve native history/clipboard/media-name transitions were not verified' }
     if (@($nativeReport.checks | Where-Object check -eq 'native_shared_drop_step').Count -ne 4) { throw 'Native insert/reorder/undo transitions were not verified' }
+    if ($Audio -and (-not $nativeReport.independent_audio_acceptance -or @($nativeReport.checks | Where-Object check -eq 'native_independent_audio_step').Count -ne 8)) { throw 'Eight native audio import/place/trim/move/gain/mute/delete/undo transitions were not verified' }
+    if ($Audio -and @($nativeReport.checks | Where-Object check -eq 'native_mixed_audio_playback').Count -ne 1) { throw 'Native mixed audio device playback was not verified' }
     if ($Uhd) {
         $expectedWidth = if ($Portrait) { 2160 } else { 3840 }
         $expectedHeight = if ($Portrait) { 3840 } else { 2160 }
@@ -101,10 +109,37 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Native UHD independent FFprobe failed' }
         $probe = $probeJson | ConvertFrom-Json
         $video = @($probe.streams | Where-Object codec_type -eq 'video')[0]
-        $audio = @($probe.streams | Where-Object codec_type -eq 'audio')[0]
+        $nativeAudioStream = @($probe.streams | Where-Object codec_type -eq 'audio')[0]
         if ($video.width -ne $expectedWidth -or $video.height -ne $expectedHeight -or $video.r_frame_rate -ne '60/1' -or [long]$video.nb_frames -ne [long]$rendered.frames -or $video.codec_name -ne 'h264') { throw 'Actual native UHD file video parameters mismatch' }
-        if ($audio.sample_rate -ne '48000' -or $audio.channels -ne 2 -or $audio.codec_name -ne 'aac' -or [Math]::Abs([double]$audio.duration - [double]$rendered.duration_seconds) -gt 0.05) { throw 'Actual native UHD file audio/duration mismatch' }
+        if ($nativeAudioStream.sample_rate -ne '48000' -or $nativeAudioStream.channels -ne 2 -or $nativeAudioStream.codec_name -ne 'aac' -or [Math]::Abs([double]$nativeAudioStream.duration - [double]$rendered.duration_seconds) -gt 0.05) { throw 'Actual native UHD file audio/duration mismatch' }
         Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'uhd-file-verified.json') -Value @{passed=$true;portrait=[bool]$Portrait;probe=$probe;render_result=$rendered;limits='720p synthetic source is upscaled; source-detail and marker-sync acceptance belongs to uhd_export tests. Physical speaker/display synchronization is untested.'}
+    }
+    if ($Audio) {
+        # Inspect the actual Studio output, beyond the service's structural/full-decode checks.
+        $mixedPcm = Join-Path $nativeDirectory 'export-audio.f32'
+        & $nativeFfmpeg -v error -nostdin -n -i $nativeReport.render_result.path -map 0:a:0 -ar 48000 -ac 2 -f f32le $mixedPcm
+        if ($LASTEXITCODE -ne 0) { throw 'Native mixed-export audio decode failed' }
+        $mixedBytes = [IO.File]::ReadAllBytes($mixedPcm)
+        if ($mixedBytes.Length % 8 -ne 0 -or $mixedBytes.Length -lt 96000 * 8) { throw 'Native mixed-export decoded audio duration/sample frames mismatch' }
+        function Measure-NativeTone([double]$StartSeconds, [double]$Frequency) {
+            $toneStart = [int]($StartSeconds * 48000)
+            $toneCount = 9600
+            $toneReal = 0.0
+            $toneImaginary = 0.0
+            for ($toneIndex = 0; $toneIndex -lt $toneCount; $toneIndex++) {
+                $toneValue = [BitConverter]::ToSingle($mixedBytes, ($toneStart + $toneIndex) * 8)
+                $toneAngle = 2.0 * [Math]::PI * $Frequency * $toneIndex / 48000.0
+                $toneReal += $toneValue * [Math]::Cos($toneAngle)
+                $toneImaginary += $toneValue * [Math]::Sin($toneAngle)
+            }
+            2.0 * [Math]::Sqrt($toneReal * $toneReal + $toneImaginary * $toneImaginary) / $toneCount
+        }
+        $earlyMusic = Measure-NativeTone -StartSeconds 0.25 -Frequency 880
+        $lateMusic = Measure-NativeTone -StartSeconds 1.25 -Frequency 880
+        $earlyLinked = Measure-NativeTone -StartSeconds 0.25 -Frequency 440
+        $lateLinked = Measure-NativeTone -StartSeconds 1.25 -Frequency 440
+        if ($earlyMusic -ge 0.002 -or $lateMusic -le 0.02 -or $earlyLinked -le 0.02 -or $lateLinked -le 0.02) { throw 'Decoded native audio mix/placement markers mismatch' }
+        Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'audio-file-verified.json') -Value @{passed=$true;canonical_sample_frames=($mixedBytes.Length / 8);early_880hz=$earlyMusic;late_880hz=$lateMusic;early_440hz=$earlyLinked;late_440hz=$lateLinked;limits='Generated 440Hz linked source and delayed 880Hz independent contribution; decoded marker windows do not establish physical speaker/display A/V timing.'}
     }
     & (Join-Path $lumerynTarget 'debug/lumeryn.exe') project check --project $nativeDemo.project --assets
     if ($LASTEXITCODE -ne 0) { throw 'Post-Studio project integrity failed' }

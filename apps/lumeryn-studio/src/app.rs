@@ -24,6 +24,16 @@ use std::{
 };
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AudioEdit {
+    pub clip: Uuid,
+    pub at_frame: u64,
+    pub source_in_sample: u64,
+    pub duration_frames: u64,
+    pub gain_millidecibels: i32,
+    pub muted: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Panel {
     Settings,
@@ -214,6 +224,9 @@ pub struct Session {
     pub selected: Option<Uuid>,
     trim_source: u64,
     trim_duration: u64,
+    audio_gain_db: f32,
+    audio_muted: bool,
+    audio_at_frame: u64,
     pub preview: Option<PreviewPlayer>,
     preview_tools: MediaTools,
     quality: usize,
@@ -301,6 +314,9 @@ impl Session {
             selected: None,
             trim_source: 0,
             trim_duration: 1,
+            audio_gain_db: 0.0,
+            audio_muted: false,
+            audio_at_frame: 0,
             preview,
             preview_tools: preview_tools.clone(),
             quality: 1,
@@ -523,13 +539,14 @@ impl Session {
             }
             match envelope.message {
                 Message::Snapshot(project) => {
-                    let changed = self
-                        .project
-                        .as_ref()
-                        .is_none_or(|p| p.revision != project.revision);
+                    let changed = self.project.as_ref().is_none_or(|p| {
+                        p.revision != project.revision || p.schema_version != project.schema_version
+                    });
                     self.connected = true;
                     self.connection = "Connected · shared project service".into();
                     if changed {
+                        egui::DragAndDrop::clear_payload(ctx);
+                        self.timeline.cancel_gesture();
                         if self.media_rename.take().is_some() {
                             self.fail(
                                 "The project changed. Reopen Rename to use its latest revision."
@@ -554,8 +571,8 @@ impl Session {
                             if let Err(error) = preview.load(project.clone(), path.clone()) {
                                 self.fail(format!("Preview load: {error}"));
                             } else {
-                                self.frame_wait_until =
-                                    Some(Instant::now() + Duration::from_secs(30));
+                                self.frame_wait_until = (!project.clips.is_empty())
+                                    .then(|| Instant::now() + Duration::from_secs(30));
                                 self.pending_seek = (self.playhead != 0)
                                     .then_some((project.revision, self.playhead));
                                 if was_playing && let Err(error) = preview.play() {
@@ -563,10 +580,10 @@ impl Session {
                                 }
                             }
                         }
-                        if self
-                            .selected
-                            .is_none_or(|id| !project.clips.iter().any(|clip| clip.id == id))
-                        {
+                        if self.selected.is_none_or(|id| {
+                            !project.clips.iter().any(|clip| clip.id == id)
+                                && !project.audio_clips.iter().any(|clip| clip.id == id)
+                        }) {
                             self.selected = project
                                 .clips
                                 .iter()
@@ -585,6 +602,16 @@ impl Session {
                         {
                             self.trim_source = clip.source_in_frame;
                             self.trim_duration = clip.duration_frames;
+                        } else if let Some(clip) = project
+                            .audio_clips
+                            .iter()
+                            .find(|clip| Some(clip.id) == self.selected)
+                        {
+                            self.trim_source = clip.source_in_sample;
+                            self.trim_duration = clip.duration_frames;
+                            self.audio_at_frame = clip.at_frame;
+                            self.audio_gain_db = clip.gain_millidecibels as f32 / 1000.0;
+                            self.audio_muted = clip.muted;
                         }
                         self.project = Some(project);
                     }
@@ -679,7 +706,7 @@ impl Session {
         }
     }
 
-    fn select(&mut self, id: Uuid) {
+    pub(crate) fn select(&mut self, id: Uuid) {
         self.selected = Some(id);
         if let Some(clip) = self
             .project
@@ -688,6 +715,16 @@ impl Session {
         {
             self.trim_source = clip.source_in_frame;
             self.trim_duration = clip.duration_frames;
+        } else if let Some(clip) = self
+            .project
+            .as_ref()
+            .and_then(|project| project.audio_clips.iter().find(|clip| clip.id == id))
+        {
+            self.trim_source = clip.source_in_sample;
+            self.trim_duration = clip.duration_frames;
+            self.audio_gain_db = clip.gain_millidecibels as f32 / 1000.0;
+            self.audio_muted = clip.muted;
+            self.audio_at_frame = clip.at_frame;
         }
     }
 
@@ -841,6 +878,54 @@ impl Session {
                 operations: vec![operation],
             },
             label,
+        )
+    }
+    pub(crate) fn trim_audio(&mut self, clip: Uuid, duration: u64) -> bool {
+        let Some(source_in_sample) = self
+            .project
+            .as_ref()
+            .and_then(|project| project.audio_clips.iter().find(|item| item.id == clip))
+            .map(|item| item.source_in_sample)
+        else {
+            return false;
+        };
+        self.edit(
+            Edit::TrimAudioClip {
+                clip_id: clip,
+                source_in_sample,
+                duration_frames: duration,
+            },
+            "Trim audio",
+        )
+    }
+    pub(crate) fn apply_audio(
+        &mut self,
+        AudioEdit {
+            clip,
+            at_frame,
+            source_in_sample,
+            duration_frames,
+            gain_millidecibels,
+            muted,
+        }: AudioEdit,
+    ) -> bool {
+        self.edit_batch(
+            Batch {
+                operations: vec![
+                    Edit::SetAudioRange {
+                        clip_id: clip,
+                        at_frame,
+                        source_in_sample,
+                        duration_frames,
+                    },
+                    Edit::SetAudioProperties {
+                        clip_id: clip,
+                        gain_millidecibels,
+                        muted,
+                    },
+                ],
+            },
+            "Apply audio",
         )
     }
     fn edit_batch(&mut self, batch: Batch, label: &str) -> bool {
@@ -1012,6 +1097,7 @@ impl Session {
             return;
         };
         let mut add = None;
+        let mut add_audio = None;
         let mut rename = None;
         let mut remove = None;
         let width = (ui.available_width() - 12.0) / 2.0;
@@ -1033,7 +1119,11 @@ impl Session {
                                     Vec2::new(width, width * 9.0 / 16.0),
                                     Sense::click_and_drag(),
                                 );
-                                if self.connected && !self.edit_busy && response.drag_started_by(egui::PointerButton::Primary) {
+                                if self.connected
+                                    && !self.edit_busy
+                                    && !still_png(media)
+                                    && response.drag_started_by(egui::PointerButton::Primary)
+                                {
                                     response.dnd_set_drag_payload(timeline::DragPayload {
                                         project: project.id,
                                         revision: project.revision,
@@ -1051,17 +1141,66 @@ impl Session {
                                         unit_rect(),
                                         Color32::WHITE,
                                     );
+                                } else if let Some(waveform) = self
+                                    .assets
+                                    .as_ref()
+                                    .and_then(|assets| assets.waveform(media.id))
+                                {
+                                    let plot = rect.shrink2(Vec2::new(8.0, 12.0));
+                                    let columns = (plot.width() / 2.0).ceil().max(1.0) as usize;
+                                    let paint = ui.painter().with_clip_rect(plot);
+                                    for column in 0..columns {
+                                        let bin = column * waveform.peaks.len() / columns;
+                                        if let Some(peak) = waveform.peaks.get(bin) {
+                                            let amplitude = (peak / waveform.max_peak.max(0.001))
+                                                .clamp(0.0, 1.0)
+                                                * plot.height()
+                                                * 0.45;
+                                            let x = plot.left() + column as f32 * 2.0;
+                                            paint.line_segment(
+                                                [
+                                                    egui::pos2(x, plot.center().y - amplitude),
+                                                    egui::pos2(x, plot.center().y + amplitude),
+                                                ],
+                                                Stroke::new(1.0, Color32::from_rgb(77, 135, 171)),
+                                            );
+                                        }
+                                    }
                                 } else {
                                     ui.painter().text(
                                         rect.center(),
                                         egui::Align2::CENTER_CENTER,
-                                        if media.metadata.video.is_some() {
+                                        if still_png(media) {
+                                            "Image"
+                                        } else if media.metadata.video.is_some() {
                                             "Video"
-                                        } else {
+                                        } else if media.metadata.audio.is_some() {
                                             "Audio"
+                                        } else {
+                                            "Image"
                                         },
                                         egui::FontId::proportional(13.0),
                                         design::MUTED,
+                                    );
+                                }
+                                if media.metadata.video.is_none()
+                                    && let Some(samples) = media
+                                        .metadata
+                                        .audio
+                                        .as_ref()
+                                        .and_then(|audio| audio.canonical_samples_48k)
+                                {
+                                    let badge = egui::Rect::from_min_size(
+                                        rect.right_bottom() - Vec2::new(48.0, 24.0),
+                                        Vec2::new(45.0, 21.0),
+                                    );
+                                    ui.painter().rect_filled(badge, 3.0, design::BACKGROUND);
+                                    ui.painter().text(
+                                        badge.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        timecode(samples as f64 / 48000.0, false),
+                                        egui::FontId::proportional(12.0),
+                                        design::TEXT,
                                     );
                                 }
                                 ui.painter().rect_stroke(
@@ -1081,7 +1220,10 @@ impl Session {
                                     ),
                                     egui::StrokeKind::Inside,
                                 );
-                                if let Some(video) = &media.metadata.video {
+                                if !still_png(media)
+                                    && let Some(video) = &media.metadata.video
+                                    && video.frames > 0
+                                {
                                     let seconds = video.frames as f64
                                         * f64::from(video.frame_rate.denominator())
                                         / f64::from(video.frame_rate.numerator());
@@ -1100,6 +1242,10 @@ impl Session {
                                     if response.double_clicked() {
                                         add = Some((media.id, video.frames));
                                     }
+                                } else if response.double_clicked()
+                                    && media.metadata.audio.is_some()
+                                {
+                                    add_audio = Some(media.id);
                                 }
                                 if response.clicked() {
                                     self.selected_media = Some(media.id);
@@ -1120,7 +1266,12 @@ impl Session {
                                         .clips
                                         .iter()
                                         .filter(|clip| clip.media_id == media.id)
-                                        .count();
+                                        .count()
+                                        + project
+                                            .audio_clips
+                                            .iter()
+                                            .filter(|clip| clip.media_id == media.id)
+                                            .count();
                                     if ui
                                         .add_enabled(
                                             enabled && usage == 0,
@@ -1146,9 +1297,15 @@ impl Session {
                                             .color(design::MUTED),
                                     );
                                 });
-                                response.on_hover_text(
-                                    "Drag a video to the timeline; an insertion marker shows where it will go. Double-click to append.",
-                                );
+                                response.on_hover_text(if still_png(media) {
+                                    "Image timeline placement is coming soon."
+                                } else if media.metadata.video.is_some() {
+                                    "Drag to a video boundary. Double-click to append."
+                                } else if media.metadata.audio.is_some() {
+                                    "Drag onto Audio 1. Double-click to add at the playhead."
+                                } else {
+                                    "Image timeline placement is coming soon."
+                                });
                                 ui.add(egui::Label::new(media_name(media)).truncate())
                                     .on_hover_text(media.path.display().to_string());
                                 if let Some(error) =
@@ -1178,7 +1335,9 @@ impl Session {
             .media
             .iter()
             .find(|m| Some(m.id) == self.selected_media)
+            && !still_png(media)
             && let Some(video) = &media.metadata.video
+            && video.frames > 0
             && ui
                 .add_enabled(
                     self.connected && !self.edit_busy,
@@ -1191,6 +1350,25 @@ impl Session {
         }
         if let Some(rename) = rename {
             self.media_rename = Some(rename);
+        }
+        if let Some(media) = project
+            .media
+            .iter()
+            .find(|media| Some(media.id) == self.selected_media)
+            && media.metadata.video.is_none()
+            && media.metadata.audio.is_some()
+            && ui
+                .add_enabled(
+                    self.connected
+                        && !self.edit_busy
+                        && project.audio_track_id.is_some()
+                        && timeline::total_frames(project) > 0,
+                    egui::Button::new("Add audio at playhead")
+                        .min_size(Vec2::new(ui.available_width(), 36.0)),
+                )
+                .clicked()
+        {
+            add_audio = Some(media.id);
         }
         if let Some(id) = remove {
             self.remove_media(id);
@@ -1205,6 +1383,10 @@ impl Session {
                 },
                 "Add clip",
             );
+        } else if let Some(media_id) = add_audio
+            && let Some(payload) = self.drag_payload(timeline::DragSource::Media(media_id))
+        {
+            self.drop_audio(payload, self.playhead);
         }
     }
     fn update_volume(&mut self) {
@@ -1486,6 +1668,15 @@ impl Session {
         });
     }
     fn inspector(&mut self, ui: &mut egui::Ui) {
+        if self.project.as_ref().is_some_and(|project| {
+            project
+                .audio_clips
+                .iter()
+                .any(|clip| Some(clip.id) == self.selected)
+        }) {
+            self.audio_inspector(ui);
+            return;
+        }
         let Some(project) = &self.project else {
             ui.label("Open a project to begin.");
             return;
@@ -1681,6 +1872,15 @@ impl Session {
                         );
                     }
                     timeline::Action::RejectDrop(error) => self.fail(error.into()),
+                    timeline::Action::DeleteAudio(clip_id) => {
+                        self.edit(Edit::DeleteAudioClip { clip_id }, "Delete audio");
+                    }
+                    timeline::Action::TrimAudio { clip, duration } => {
+                        self.trim_audio(clip, duration);
+                    }
+                    timeline::Action::DropAudio { payload, at_frame } => {
+                        self.drop_audio(payload, at_frame);
+                    }
                     timeline::Action::Drop { payload, before } => {
                         self.drop_on_timeline(payload, before);
                     }
@@ -1745,8 +1945,210 @@ impl Session {
                     duration_frames: video.frames,
                 }
             }
+            timeline::DragSource::AudioClip { .. } => {
+                self.fail("Drop independent audio on Audio 1.".into());
+                return false;
+            }
         };
         self.edit(operation, "Drag clip")
+    }
+    pub(crate) fn drop_audio(&mut self, payload: timeline::DragPayload, at_frame: u64) -> bool {
+        let Some(project) = &self.project else {
+            return false;
+        };
+        if payload.project != project.id
+            || payload.revision != project.revision
+            || payload.epoch != self.epoch
+        {
+            self.fail("The project changed during this audio drag. Drag again.".into());
+            return false;
+        }
+        let operation = match payload.source {
+            timeline::DragSource::AudioClip { clip, .. } => {
+                if project
+                    .audio_clips
+                    .iter()
+                    .any(|item| item.id == clip && item.at_frame == at_frame)
+                {
+                    return false;
+                }
+                Edit::MoveAudioClip {
+                    clip_id: clip,
+                    at_frame,
+                }
+            }
+            timeline::DragSource::Media(media_id) => {
+                if project
+                    .media
+                    .iter()
+                    .any(|media| media.id == media_id && media.metadata.video.is_some())
+                {
+                    self.fail("Drop an imported audio file here. Detaching a video's audio is not available yet.".into());
+                    return false;
+                }
+                if project
+                    .media
+                    .iter()
+                    .find(|media| media.id == media_id)
+                    .and_then(|media| media.metadata.audio.as_ref())
+                    .is_some_and(|audio| audio.channels > 2 || audio.start_time_micros != 0)
+                {
+                    self.fail(
+                        "Only zero-origin mono or stereo audio can be placed on Audio 1.".into(),
+                    );
+                    return false;
+                }
+                let Some(samples) = project
+                    .media
+                    .iter()
+                    .find(|media| media.id == media_id)
+                    .and_then(|media| media.metadata.audio.as_ref())
+                    .and_then(|audio| audio.canonical_samples_48k)
+                else {
+                    self.fail("Reimport this audio source to verify its decoded length before Studio placement.".into());
+                    return false;
+                };
+                let available = timeline::total_frames(project).saturating_sub(at_frame);
+                let duration = (u128::from(samples) * u128::from(project.frame_rate.numerator())
+                    / (u128::from(project.frame_rate.denominator()) * 48000))
+                    .min(u128::from(available)) as u64;
+                if duration == 0 {
+                    self.fail("Audio needs available visual timeline space.".into());
+                    return false;
+                }
+                Edit::AddAudioClip {
+                    id: Uuid::new_v4(),
+                    media_id,
+                    at_frame,
+                    source_in_sample: 0,
+                    duration_frames: duration,
+                    gain_millidecibels: 0,
+                    muted: false,
+                }
+            }
+            timeline::DragSource::Clip(_) => {
+                self.fail("Use an imported audio source on Audio 1.".into());
+                return false;
+            }
+        };
+        self.edit(operation, "Drag audio")
+    }
+    fn audio_inspector(&mut self, ui: &mut egui::Ui) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        let Some(clip) = project
+            .audio_clips
+            .iter()
+            .find(|clip| Some(clip.id) == self.selected)
+        else {
+            return;
+        };
+        let id = clip.id;
+        let name = project
+            .media
+            .iter()
+            .find(|media| media.id == clip.media_id)
+            .map_or_else(|| "Audio".into(), |media| media.display_name());
+        ui.label(RichText::new(name).strong());
+        ui.label(
+            RichText::new("Independent audio · included in export")
+                .small()
+                .color(design::MUTED),
+        );
+        ui.add_space(12.0);
+        let fps =
+            f64::from(project.frame_rate.numerator()) / f64::from(project.frame_rate.denominator());
+        let mut start = self.audio_at_frame as f64 / fps;
+        let mut source = self.trim_source as f64 / 48000.0;
+        let mut duration = self.trim_duration as f64 / fps;
+        egui::Grid::new("audio-clip-properties")
+            .num_columns(2)
+            .spacing(Vec2::new(8.0, 12.0))
+            .show(ui, |ui| {
+                ui.label("Timeline start");
+                ui.add(
+                    egui::DragValue::new(&mut start)
+                        .speed(1.0 / fps)
+                        .range(0.0..=timeline::total_frames(project) as f64 / fps)
+                        .custom_formatter(|v, _| timecode(v, true))
+                        .custom_parser(parse_timecode),
+                );
+                ui.end_row();
+                ui.label("Source start");
+                ui.add(
+                    egui::DragValue::new(&mut source)
+                        .speed(0.01)
+                        .range(0.0..=1e9)
+                        .custom_formatter(|v, _| timecode(v, true))
+                        .custom_parser(parse_timecode),
+                );
+                ui.end_row();
+                ui.label("Length");
+                ui.add(
+                    egui::DragValue::new(&mut duration)
+                        .speed(1.0 / fps)
+                        .range(1.0 / fps..=timeline::total_frames(project) as f64 / fps)
+                        .custom_formatter(|v, _| timecode(v, true))
+                        .custom_parser(parse_timecode),
+                );
+                ui.end_row();
+            });
+        self.audio_at_frame = (start * fps).round() as u64;
+        self.trim_source = (source * 48000.0).round() as u64;
+        self.trim_duration = (duration * fps).round().max(1.0) as u64;
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.label("Volume");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut self.audio_gain_db)
+                        .range(-60.0..=12.0)
+                        .speed(0.5)
+                        .suffix(" dB"),
+                );
+            });
+        });
+        ui.scope(|ui| {
+            ui.spacing_mut().slider_width = (ui.available_width() - 8.0).max(80.0);
+            ui.spacing_mut().slider_rail_height = 4.0;
+            ui.spacing_mut().interact_size.y = 20.0;
+            ui.visuals_mut().selection.bg_fill = design::ACCENT;
+            ui.add(
+                egui::Slider::new(&mut self.audio_gain_db, -60.0..=12.0)
+                    .show_value(false)
+                    .trailing_fill(true),
+            )
+            .on_hover_text(
+                "0 dB retains the original level. -6 dB is about half the signal amplitude.",
+            );
+        });
+        ui.checkbox(&mut self.audio_muted, "Mute this clip");
+        ui.add_space(12.0);
+        let apply = design::primary(
+            ui,
+            "Apply audio",
+            self.connected && !self.edit_busy,
+            ui.available_width(),
+        )
+        .clicked();
+        ui.label(
+            RichText::new(
+                "Overlapping clips mix together. Video rearrangement keeps this audio's position.",
+            )
+            .small()
+            .color(design::MUTED),
+        );
+        if apply {
+            self.apply_audio(AudioEdit {
+                clip: id,
+                at_frame: self.audio_at_frame,
+                source_in_sample: self.trim_source,
+                duration_frames: self.trim_duration,
+                gain_millidecibels: (self.audio_gain_db * 1000.0).round() as i32,
+                muted: self.audio_muted,
+            });
+        }
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
         design::section(
@@ -1816,6 +2218,25 @@ impl Session {
         }
     }
     fn project_panel(&mut self, ui: &mut egui::Ui) {
+        if self
+            .project
+            .as_ref()
+            .is_some_and(|project| project.schema_version == 1)
+        {
+            ui.label(RichText::new("Upgrade for audio editing").strong());
+            ui.label(RichText::new("Creates a local backup, then upgrades every revision without changing your edit history. Older builds cannot edit the upgraded project.").small().color(design::MUTED));
+            if ui
+                .add_enabled(
+                    self.connected && !self.edit_busy,
+                    egui::Button::new("Back up & upgrade project"),
+                )
+                .clicked()
+                && self.send(Command::Migrate)
+            {
+                self.edit_busy = true;
+            }
+            ui.separator();
+        }
         let Some(project) = &self.project else {
             ui.label("Open a project to begin.");
             if ui.button("Choose a project…").clicked() {
@@ -2310,6 +2731,14 @@ fn export_name_valid(name: &str) -> bool {
             .chars()
             .any(|character| character.is_control() || "/\\:*?\"<>|".contains(character))
 }
+fn still_png(media: &lumeryn_core::model::Media) -> bool {
+    media.metadata.audio.is_none()
+        && media
+            .metadata
+            .video
+            .as_ref()
+            .is_some_and(|video| video.codec == "png" && video.frames <= 1)
+}
 fn media_name(media: &lumeryn_core::model::Media) -> String {
     media.display_name()
 }
@@ -2406,7 +2835,7 @@ impl Studio {
             options
                 .artifact_dir
                 .clone()
-                .map(|directory| Smoke::new(directory, options.smoke_history))
+                .map(|directory| Smoke::new(directory, options.smoke_history, options.smoke_audio))
         } else {
             None
         };
@@ -2445,8 +2874,11 @@ impl Studio {
                 } else {
                     Some(RightDrawer::Clip)
                 },
-                active: if options.capture_only && options.capture_state == CaptureState::Inspector
-                {
+                active: if options.capture_only
+                    && matches!(
+                        options.capture_state,
+                        CaptureState::Inspector | CaptureState::Audio
+                    ) {
                     RailSide::Right
                 } else {
                     RailSide::Left
@@ -2690,6 +3122,11 @@ impl Studio {
                     .iter()
                     .find(|clip| clip.id == id)
                     .map(|clip| clip.media_id),
+                timeline::DragSource::AudioClip { clip, .. } => project
+                    .audio_clips
+                    .iter()
+                    .find(|item| item.id == clip)
+                    .map(|item| item.media_id),
             };
             if let Some(media) = project
                 .media
@@ -2721,7 +3158,13 @@ impl Studio {
                 painter.text(
                     rect.left_bottom() + Vec2::new(10.0, -10.0),
                     egui::Align2::LEFT_BOTTOM,
-                    "Drag to a clip boundary",
+                    if matches!(payload.source, timeline::DragSource::AudioClip { .. })
+                        || media.metadata.video.is_none()
+                    {
+                        "Drop on Audio 1"
+                    } else {
+                        "Drag to a clip boundary"
+                    },
                     egui::FontId::proportional(11.0),
                     design::MUTED,
                 );
@@ -2775,6 +3218,7 @@ impl eframe::App for Studio {
             || self.session.picker.is_some()
         {
             egui::DragAndDrop::clear_payload(ui.ctx());
+            self.session.timeline.cancel_gesture();
         }
         let started = Instant::now();
         let ctx = ui.ctx().clone();
@@ -2866,30 +3310,53 @@ impl eframe::App for Studio {
                 && let Some(clip_id) = self.session.selected
             {
                 if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
-                    self.session.edit(
-                        Edit::DeleteClip {
-                            clip_id,
-                            ripple: true,
-                        },
-                        "Delete clip",
-                    );
+                    if self.session.project.as_ref().is_some_and(|project| {
+                        project.audio_clips.iter().any(|clip| clip.id == clip_id)
+                    }) {
+                        self.session
+                            .edit(Edit::DeleteAudioClip { clip_id }, "Delete audio");
+                    } else {
+                        self.session.edit(
+                            Edit::DeleteClip {
+                                clip_id,
+                                ripple: true,
+                            },
+                            "Delete clip",
+                        );
+                    }
                 } else if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::D)) {
-                    self.session.edit(
-                        Edit::DuplicateClip {
-                            clip_id,
-                            id: Uuid::new_v4(),
-                        },
-                        "Duplicate clip",
-                    );
+                    if self.session.project.as_ref().is_some_and(|project| {
+                        project.audio_clips.iter().any(|clip| clip.id == clip_id)
+                    }) {
+                        self.session.fail(
+                            "Audio duplication is not implemented; add the source again.".into(),
+                        );
+                    } else {
+                        self.session.edit(
+                            Edit::DuplicateClip {
+                                clip_id,
+                                id: Uuid::new_v4(),
+                            },
+                            "Duplicate clip",
+                        );
+                    }
                 } else if ctx.input(|i| !i.modifiers.command && i.key_pressed(egui::Key::S)) {
-                    self.session.edit(
-                        Edit::SplitClip {
-                            clip_id,
-                            right_clip_id: Uuid::new_v4(),
-                            at_frame: self.session.playhead,
-                        },
-                        "Split clip",
-                    );
+                    if self.session.project.as_ref().is_some_and(|project| {
+                        project.audio_clips.iter().any(|clip| clip.id == clip_id)
+                    }) {
+                        self.session.fail(
+                            "Audio split is not implemented; use source trim controls.".into(),
+                        );
+                    } else {
+                        self.session.edit(
+                            Edit::SplitClip {
+                                clip_id,
+                                right_clip_id: Uuid::new_v4(),
+                                at_frame: self.session.playhead,
+                            },
+                            "Split clip",
+                        );
+                    }
                 }
             }
             if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
@@ -3001,17 +3468,30 @@ impl eframe::App for Studio {
         }
         if self.capture.is_some() {
             let ready = if self.capture_state == CaptureState::Empty {
-                self.session.project.is_none()
+                if self.session.project_input.is_empty() {
+                    self.session.project.is_none()
+                } else {
+                    self.session.connected
+                        && self
+                            .session
+                            .project
+                            .as_ref()
+                            .is_some_and(|project| project.clips.is_empty())
+                }
             } else if let Some(project) = &self.session.project {
                 let revision = project.revision;
                 let target = self
                     .capture_frame
                     .min(timeline::total_frames(project).saturating_sub(1));
-                let clip = project
-                    .clips
-                    .iter()
-                    .find(|c| c.at_frame <= target && target < c.at_frame + c.duration_frames)
-                    .map(|c| c.id);
+                let clip = if self.capture_state == CaptureState::Audio {
+                    project.audio_clips.first().map(|clip| clip.id)
+                } else {
+                    project
+                        .clips
+                        .iter()
+                        .find(|c| c.at_frame <= target && target < c.at_frame + c.duration_frames)
+                        .map(|c| c.id)
+                };
                 if self.capture_seek_revision != Some(revision) && self.session.last_frame.is_some()
                 {
                     self.session.seek(target);

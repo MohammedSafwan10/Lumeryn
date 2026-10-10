@@ -310,6 +310,9 @@ enum AssetCommand {
 
 #[derive(Debug, Subcommand)]
 enum TimelineCommand {
+    /// Independent audio clips, evaluated identically by native preview and final export.
+    #[command(subcommand)]
+    Audio(AudioCommand),
     /// Set the project canvas; final output fits this aspect without stretching sources.
     Canvas {
         #[command(flatten)]
@@ -327,6 +330,75 @@ enum TimelineCommand {
     },
     #[command(subcommand)]
     Clip(ClipCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum AudioCommand {
+    /// Atomically set timeline position and source range together.
+    Range {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        at_frame: u64,
+        #[arg(long)]
+        source_in_sample: u64,
+        #[arg(long)]
+        duration_frames: u64,
+    },
+    Add {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        id: Option<Uuid>,
+        #[arg(long)]
+        media_id: Uuid,
+        #[arg(long, default_value = "0")]
+        at_frame: u64,
+        #[arg(long, default_value = "0")]
+        source_in_sample: u64,
+        #[arg(long)]
+        duration_frames: u64,
+        #[arg(long, default_value = "0", allow_negative_numbers = true)]
+        gain_millidecibels: i32,
+        #[arg(long)]
+        muted: bool,
+    },
+    Move {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        at_frame: u64,
+    },
+    Trim {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        source_in_sample: u64,
+        #[arg(long)]
+        duration_frames: u64,
+    },
+    Properties {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long, default_value = "0", allow_negative_numbers = true)]
+        gain_millidecibels: i32,
+        #[arg(long)]
+        muted: bool,
+    },
+    Delete {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -603,20 +675,20 @@ async fn execute(cli: Cli) -> Result<Value> {
             }
         }
         Command::Capabilities => Ok(json!({
-            "api_version":1,"project_schema_version":1,"output":"json",
-            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","media.list","media.inspect","media.rename","media.remove","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.insert","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
+            "api_version":1,"project_schema_version":lumeryn_core::model::SCHEMA_VERSION,"output":"json",
+            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","media.list","media.inspect","media.rename","media.remove","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.insert","timeline.audio.add","timeline.audio.move","timeline.audio.trim","timeline.audio.range","timeline.audio.properties","timeline.audio.delete","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
             "media_management":{"alias":"project-only; null resets source filename display","alias_maximum_utf8_bytes":256,"remove":"unused project references only; rejects referenced media; source bytes unchanged","undo_redo":true,"dry_run":true},
             "history":{"undo_redo":"new monotonic revisions; logical history restored transactionally","undo_redo_batch":"sole operation only","branch_edit_clears_redo":true},
             "clipboard":{"version":1,"maximum_payload_bytes":16384,"scope":"same project and already-imported BLAKE3 source identity","payload":"result.clipboard object","cross_project_transfer":"staged","paste":"authoritative typed PasteClip with new stable ID and exact source ranges"},
             "requires_external_tools":["media.probe","media.import","render"],
-            "export_limits":{"track":"one video track","layout":"1..64 contiguous nonoverlapping clips starting at frame 0","source":"matching CFR; frame timestamps verified","audio":"embedded audio or silence; stereo 48000Hz","color":"baseline SDR; no managed HDR"},
+            "export_limits":{"track":"one video track","layout":"1..64 contiguous nonoverlapping clips starting at frame 0","source":"matching CFR; frame timestamps verified","audio":"embedded audio plus independent mono/stereo zero-origin sources; canonical stereo 48000Hz; max64 contributions","color":"baseline SDR; no managed HDR"},
             "export_options":{"resolution":["project","hd720","fhd1080","uhd2160"],"uhd_landscape":[3840,2160],"uhd_portrait":[2160,3840],"fps":[24,25,30,60],"preserve_project_fps":true,"codecs":["mpeg4","h264","h265"],"codec_availability":"installed encoder and actual requested-size initialization","quality":["draft","balanced","high"],"bitrate_kbps_range":[100,200000],"acceleration":["cpu","auto"],"watermark":false,"subscription_required":false,"preview_settings_affect_final":false,"eight_k_hdr_mastering":"staged"},
-            "requirements":{"ordinary_editing":{"gpu_required":false,"cloud_required":false,"models_required":false,"database":"per-project SQLite3.51.3","schema_version":1,"storage_version":1},
+            "requirements":{"ordinary_editing":{"gpu_required":false,"cloud_required":false,"models_required":false,"database":"per-project SQLite3.51.3","schema_version":lumeryn_core::model::SCHEMA_VERSION,"storage_version":1},
                 "baseline_render":{"runtime":["trusted user-installed ffmpeg","trusted user-installed ffprobe"],"codec":"native mpeg4+aac; no hardware encoder selected","decoder_threads_per_input":2,"maximum_clips":64,"measured_peak_ram_bytes":null,"vram_bytes":null,"cpu_fallback":"the implemented baseline"}},
             "capability_status":{"studio":"native_baseline_prototype","preview":"cpu_decode_gpu_upload_prototype","gpu_encode_decode":"auto_encoding_probe_available_decode_not_integrated","native_text":"planned","device_audio":"cpal_prototype_physical_sync_unmeasured","semantic_vectors":"not_selected","application_database":"planned","fts5":"implemented_metadata_only","cache":"source_content_hashes_only","live_events":"implemented_bounded_replay_snapshot_resync"},
             "components":{"project_service":{"platform":"Windows","transport":"current-user ACL named pipe; remote clients rejected","supported_here":cfg!(windows),"cloud_required":false},"studio":{"executable":"lumeryn-studio","separate_install":true,"stack":"egui/eframe/egui_dock/egui-wgpu/wgpu","preview_gpu_required":true,"hardware_zero_copy":false,"physical_av_sync_verified":false}},
             "job_control":{"render_accepts_job_id":true,"client_disconnect_cancels_render":false,"cancel_command":"jobs cancel --project <path> --job-id <uuid>","render_concurrency":1,"render_queue_limit":16},
-            "planned":["gpu_compositor","hardware_decode_integration","resource_scheduler","models","blender","effects","independent_audio_tracks","transcript_fts5","native_typography","professional_audio_mixing","proxies","incremental_render_cache","vector_index"]
+            "planned":["gpu_compositor","hardware_decode_integration","resource_scheduler","models","blender","effects","audio_detach_fades_multitrack","transcript_fts5","native_typography","professional_audio_mixing","proxies","incremental_render_cache","vector_index"]
         })),
         Command::Service(ServiceCommand::Run { project }) => {
             lumeryn_service::serve(project).await?;
@@ -729,13 +801,18 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::Media(command) => match command {
             MediaCommand::List { project } => {
                 let snapshot = Client::connect(project).await?.inspect().await?;
-                let usage = snapshot.clips.iter().fold(
-                    std::collections::HashMap::<_, usize>::new(),
-                    |mut usage, clip| {
-                        *usage.entry(clip.media_id).or_default() += 1;
-                        usage
-                    },
-                );
+                let usage = snapshot
+                    .clips
+                    .iter()
+                    .map(|clip| clip.media_id)
+                    .chain(snapshot.audio_clips.iter().map(|clip| clip.media_id))
+                    .fold(
+                        std::collections::HashMap::<_, usize>::new(),
+                        |mut usage, media_id| {
+                            *usage.entry(media_id).or_default() += 1;
+                            usage
+                        },
+                    );
                 let media = snapshot
                     .media
                     .iter()
@@ -754,7 +831,12 @@ async fn execute(cli: Cli) -> Result<Value> {
                     .clips
                     .iter()
                     .filter(|clip| clip.media_id == media_id)
-                    .count();
+                    .count()
+                    + snapshot
+                        .audio_clips
+                        .iter()
+                        .filter(|clip| clip.media_id == media_id)
+                        .count();
                 Ok(json!({"revision":snapshot.revision,"media":media_view(media, usage_count)?}))
             }
             MediaCommand::Rename {
@@ -807,6 +889,92 @@ async fn execute(cli: Cli) -> Result<Value> {
             }
         },
         Command::Timeline(command) => match command {
+            TimelineCommand::Audio(command) => {
+                let (write, operation) = match command {
+                    AudioCommand::Add {
+                        write,
+                        id,
+                        media_id,
+                        at_frame,
+                        source_in_sample,
+                        duration_frames,
+                        gain_millidecibels,
+                        muted,
+                    } => {
+                        let id = operation_id(id, &write)?;
+                        (
+                            write,
+                            Edit::AddAudioClip {
+                                id,
+                                media_id,
+                                at_frame,
+                                source_in_sample,
+                                duration_frames,
+                                gain_millidecibels,
+                                muted,
+                            },
+                        )
+                    }
+                    AudioCommand::Move {
+                        write,
+                        clip_id,
+                        at_frame,
+                    } => (write, Edit::MoveAudioClip { clip_id, at_frame }),
+                    AudioCommand::Trim {
+                        write,
+                        clip_id,
+                        source_in_sample,
+                        duration_frames,
+                    } => (
+                        write,
+                        Edit::TrimAudioClip {
+                            clip_id,
+                            source_in_sample,
+                            duration_frames,
+                        },
+                    ),
+                    AudioCommand::Properties {
+                        write,
+                        clip_id,
+                        gain_millidecibels,
+                        muted,
+                    } => (
+                        write,
+                        Edit::SetAudioProperties {
+                            clip_id,
+                            gain_millidecibels,
+                            muted,
+                        },
+                    ),
+                    AudioCommand::Delete { write, clip_id } => {
+                        (write, Edit::DeleteAudioClip { clip_id })
+                    }
+                    AudioCommand::Range {
+                        write,
+                        clip_id,
+                        at_frame,
+                        source_in_sample,
+                        duration_frames,
+                    } => (
+                        write,
+                        Edit::SetAudioRange {
+                            clip_id,
+                            at_frame,
+                            source_in_sample,
+                            duration_frames,
+                        },
+                    ),
+                };
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![operation],
+                    },
+                    false,
+                    &tools,
+                )
+                .await
+            }
             TimelineCommand::Clip(ClipCommand::Copy { project, clip_id }) => {
                 let snapshot = Client::connect(project).await?.inspect().await?;
                 Ok(
@@ -944,7 +1112,7 @@ async fn execute(cli: Cli) -> Result<Value> {
             TimelineCommand::Inspect { project } => {
                 let project = Client::connect(project).await?.inspect().await?;
                 Ok(
-                    json!({"revision":project.revision,"frame_rate":project.frame_rate,"video_track_id":project.video_track_id,"clips":project.clips}),
+                    json!({"revision":project.revision,"frame_rate":project.frame_rate,"video_track_id":project.video_track_id,"clips":project.clips,"audio_track_id":project.audio_track_id,"audio_clips":project.audio_clips}),
                 )
             }
             TimelineCommand::Clip(ClipCommand::Insert {

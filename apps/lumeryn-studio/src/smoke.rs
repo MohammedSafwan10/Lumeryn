@@ -40,6 +40,20 @@ enum Stage {
         original: Uuid,
         revision: u64,
     },
+    StartAudio {
+        step: u8,
+    },
+    Audio {
+        step: u8,
+        revision: u64,
+    },
+    AudioSeek {
+        target: u64,
+    },
+    AudioPlay {
+        frames: u64,
+        started: Instant,
+    },
     History {
         revision: u64,
         frames: u64,
@@ -68,6 +82,11 @@ pub struct Smoke {
     screenshot_assets: Option<Value>,
     history_enabled: bool,
     history_steps: VecDeque<HistoryStep>,
+    audio_enabled: bool,
+    audio_media: Uuid,
+    audio_clip: Option<Uuid>,
+    audio_visual_frames: u64,
+    audio_visual_clips: Option<Value>,
 }
 
 struct HistoryStep {
@@ -78,8 +97,20 @@ struct HistoryStep {
     expected_alias: Option<(Uuid, Option<&'static str>)>,
 }
 
+fn audio_label(step: u8) -> &'static str {
+    match step {
+        0 => "Import audio fixture",
+        1 | 3 => "Drag audio",
+        2 => "Trim audio",
+        4 => "Apply audio",
+        5 => "Unmute audio",
+        6 => "Delete audio",
+        _ => "Undo",
+    }
+}
+
 impl Smoke {
-    pub fn new(directory: PathBuf, history_enabled: bool) -> Self {
+    pub fn new(directory: PathBuf, history_enabled: bool, audio_enabled: bool) -> Self {
         Self {
             directory,
             started: Instant::now(),
@@ -92,6 +123,11 @@ impl Smoke {
             screenshot_assets: None,
             history_enabled,
             history_steps: VecDeque::new(),
+            audio_enabled,
+            audio_media: Uuid::new_v4(),
+            audio_clip: None,
+            audio_visual_frames: 0,
+            audio_visual_clips: None,
         }
     }
 
@@ -127,7 +163,8 @@ impl Smoke {
             "asset_evidence":session.asset_evidence(),
             "render_result":session.last_render,
             "history_clipboard_acceptance":self.history_enabled,
-            "limitations":["Scripted actions call the same UI command paths; pointer usability and native file-dialog cancellation are separate manual acceptance.","CPU upload timing does not measure GPU completion or photon latency.","VRAM consumption is unknown without telemetry.","Audio device status alone does not prove end-to-end A/V tolerance.","Effects, multi-track composition and proxies remain staged; physical clipboard and keyboard checks remain pending. Thumbnail/waveform caches are bounded; readiness/counts are reported independently of workflow success."]
+            "independent_audio_acceptance":self.audio_enabled,
+            "limitations":["Scripted actions call the same UI command paths; pointer usability and native file-dialog cancellation are separate manual acceptance.","CPU upload timing does not measure GPU completion or photon latency.","VRAM consumption is unknown without telemetry.","Audio device status alone does not prove end-to-end A/V tolerance.","Effects, additional track topology and proxies remain staged; physical clipboard and keyboard checks remain pending. Thumbnail/waveform caches are bounded; readiness/counts are reported independently of workflow success."]
         });
         if session.send(Command::Report {
             path: self.directory.join("studio-smoke.json"),
@@ -544,6 +581,10 @@ impl Smoke {
             }
             Stage::StartDrop { step, original } => {
                 if step == 4 {
+                    if self.audio_enabled {
+                        self.stage = Stage::StartAudio { step: 0 };
+                        return;
+                    }
                     if session.export(self.directory.join("studio-smoke-export.mp4")) {
                         self.stage = Stage::Export {
                             ui_frames: session.ui_frames,
@@ -631,6 +672,240 @@ impl Smoke {
                     step: step + 1,
                     original,
                 };
+            }
+            Stage::StartAudio { step } => {
+                if step == 8 {
+                    let target = self.audio_visual_frames / 2;
+                    session.seek(target);
+                    self.stage = Stage::AudioSeek { target };
+                    return;
+                }
+                let Some(project) = &session.project else {
+                    return;
+                };
+                let revision = project.revision;
+                let half = self.audio_visual_frames / 2;
+                let submitted = match step {
+                    0 => {
+                        self.audio_visual_frames = timeline::total_frames(project);
+                        if !project.audio_clips.is_empty() || self.audio_visual_frames < 8 {
+                            self.finish(session, false, Some("Audio smoke needs an empty independent lane and at least eight visual frames".into()));
+                            return;
+                        }
+                        self.audio_visual_clips = match serde_json::to_value(&project.clips) {
+                            Ok(clips) => Some(clips),
+                            Err(error) => {
+                                self.finish(session, false, Some(error.to_string()));
+                                return;
+                            }
+                        };
+                        session.edit(
+                            lumeryn_core::Edit::Import {
+                                id: self.audio_media,
+                                path: self.directory.join("voiceover.wav"),
+                            },
+                            audio_label(step),
+                        )
+                    }
+                    1 => {
+                        let Some(payload) =
+                            session.drag_payload(timeline::DragSource::Media(self.audio_media))
+                        else {
+                            return;
+                        };
+                        session.drop_audio(payload, 0)
+                    }
+                    2 => {
+                        let Some(clip) = self.audio_clip else {
+                            return;
+                        };
+                        session.trim_audio(clip, half)
+                    }
+                    3 => {
+                        let Some(clip) = self.audio_clip else {
+                            return;
+                        };
+                        let Some(payload) = session.drag_payload(timeline::DragSource::AudioClip {
+                            clip,
+                            grab_offset: 0,
+                        }) else {
+                            return;
+                        };
+                        session.drop_audio(payload, half)
+                    }
+                    4 => {
+                        let Some(clip) = self.audio_clip else {
+                            return;
+                        };
+                        session.apply_audio(crate::app::AudioEdit {
+                            clip,
+                            at_frame: half,
+                            source_in_sample: 2400,
+                            duration_frames: half - 2,
+                            gain_millidecibels: -6000,
+                            muted: true,
+                        })
+                    }
+                    5 => {
+                        let Some(clip_id) = self.audio_clip else {
+                            return;
+                        };
+                        session.edit(
+                            lumeryn_core::Edit::SetAudioProperties {
+                                clip_id,
+                                gain_millidecibels: -6000,
+                                muted: false,
+                            },
+                            audio_label(step),
+                        )
+                    }
+                    6 => {
+                        let Some(clip_id) = self.audio_clip else {
+                            return;
+                        };
+                        session.edit(
+                            lumeryn_core::Edit::DeleteAudioClip { clip_id },
+                            audio_label(step),
+                        )
+                    }
+                    _ => session.undo(),
+                };
+                if submitted {
+                    self.stage = Stage::Audio {
+                        step,
+                        revision: revision + 1,
+                    };
+                }
+            }
+            Stage::Audio { step, revision } => {
+                let Some(project) = &session.project else {
+                    return;
+                };
+                if project.revision < revision
+                    || session.last_complete.as_deref() != Some(audio_label(step))
+                    || session
+                        .last_frame
+                        .is_none_or(|(presented, _)| presented != revision)
+                    || !session.events.iter().any(|event| {
+                        event.revision == Some(revision) && event.kind == "project_committed"
+                    })
+                {
+                    return;
+                }
+                let half = self.audio_visual_frames / 2;
+                let media = project
+                    .media
+                    .iter()
+                    .find(|media| media.id == self.audio_media);
+                let audio = media.and_then(|media| media.metadata.audio.as_ref());
+                let clip = project.audio_clips.first();
+                let clip_matches = if step == 0 || step == 6 {
+                    project.audio_clips.is_empty()
+                } else {
+                    clip.is_some_and(|clip| {
+                        let duration = if step == 1 {
+                            self.audio_visual_frames
+                        } else if step < 4 {
+                            half
+                        } else {
+                            half - 2
+                        };
+                        clip.media_id == self.audio_media
+                            && clip.at_frame == if step < 3 { 0 } else { half }
+                            && clip.source_in_sample == if step < 4 { 0 } else { 2400 }
+                            && clip.duration_frames == duration
+                            && clip.gain_millidecibels == if step < 4 { 0 } else { -6000 }
+                            && clip.muted == (step == 4)
+                            && self.audio_clip.is_none_or(|id| clip.id == id)
+                            && project.audio_clips.len() == 1
+                    })
+                };
+                let visual_clips = match serde_json::to_value(&project.clips) {
+                    Ok(clips) => clips,
+                    Err(error) => {
+                        self.finish(session, false, Some(error.to_string()));
+                        return;
+                    }
+                };
+                if project.revision != revision
+                    || timeline::total_frames(project) != self.audio_visual_frames
+                    || self.audio_visual_clips.as_ref() != Some(&visual_clips)
+                    || !clip_matches
+                    || audio.is_none_or(|audio| {
+                        audio.canonical_samples_48k != Some(96000)
+                            || audio.channels != 2
+                            || audio.sample_rate != 48000
+                    })
+                {
+                    self.finish(
+                        session,
+                        false,
+                        Some(format!(
+                            "Native independent audio state mismatch after {}",
+                            audio_label(step)
+                        )),
+                    );
+                    return;
+                }
+                if step == 1
+                    && let Some(clip) = clip
+                {
+                    self.audio_clip = Some(clip.id);
+                }
+                let detail = json!({"step":step,"operation":audio_label(step),"revision":revision,"clip":clip,"visual_frames":self.audio_visual_frames,"visual_clips_unchanged":true,"live_commit_event":true,"native_presented":session.last_frame,"canonical_source_samples":audio.map(|audio|audio.canonical_samples_48k)});
+                let selected = clip.map(|clip| clip.id);
+                self.check("native_independent_audio_step", detail);
+                if let Some(clip) = selected {
+                    session.select(clip);
+                }
+                self.stage = Stage::StartAudio { step: step + 1 };
+            }
+            Stage::AudioSeek { target } => {
+                if session.last_frame.is_none_or(|(_, frame)| frame != target) {
+                    return;
+                }
+                if let Some(preview) = &session.preview
+                    && let Err(error) = preview.play()
+                {
+                    self.finish(session, false, Some(error.to_string()));
+                    return;
+                }
+                self.stage = Stage::AudioPlay {
+                    frames: session.presented_frames,
+                    started: Instant::now(),
+                };
+            }
+            Stage::AudioPlay { frames, started } => {
+                if started.elapsed() < Duration::from_millis(250)
+                    || session.presented_frames < frames + 3
+                {
+                    return;
+                }
+                let Some(preview) = &session.preview else {
+                    return;
+                };
+                let status = preview.status();
+                if !matches!(status.audio, lumeryn_preview::AudioStatus::Playing { .. }) {
+                    self.finish(
+                        session,
+                        false,
+                        Some(format!(
+                            "Native mixed audio device did not play: {:?}",
+                            status.audio
+                        )),
+                    );
+                    return;
+                }
+                if let Err(error) = preview.pause() {
+                    self.finish(session, false, Some(error.to_string()));
+                    return;
+                }
+                self.check("native_mixed_audio_playback",json!({"new_frames":session.presented_frames-frames,"audio_status":format!("{:?}",status.audio),"position_frame":status.position_frame,"limits":"Device callback and advancing preview; physical speaker/display timing is not measured."}));
+                if session.export(self.directory.join("studio-smoke-export.mp4")) {
+                    self.stage = Stage::Export {
+                        ui_frames: session.ui_frames,
+                    };
+                }
             }
             Stage::Export { ui_frames } => {
                 if session.render_busy || session.last_complete.as_deref() != Some("Export") {

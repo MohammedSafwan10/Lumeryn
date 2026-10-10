@@ -71,3 +71,9 @@ Implemented evidence: [native acceptance](../testing/STUDIO_REDESIGN.md), [actua
 ## 2026-10-10 approved-family refinements
 
 Owner requested cleaner Export/Project organization and consistent researched typography. Native Inter Regular, grouped export settings with fixed filename/action area, simplified Project drawer and shared project-local media names are implemented. Current contract/actual11-state visual evidence, tests, licences, limits and exact next composition work are in [STUDIO_POLISH](../testing/STUDIO_POLISH.md), ADRs0018–0019 and research/STUDIO_TYPOGRAPHY.md. Retained real views live in native-polish-v1; no fresh concept selection is needed. Physical input/highDPI checks remain pending.
+
+## 2026-10-10 independent audio and drag/drop
+
+Media/video/linked-audio insertion and rearrangement share the Rust service; independent Audio1 clips now have actual waveforms, grabbed-offset movement, right-edge trim and atomic range/volume/mute properties. The approved mint/Inter/two-rail composition remains unchanged. Final wide/compact audio and medium video views were visually inspected, including the real imported PNG and reviewed CC0 music. See [executed acceptance](../testing/AUDIO_COMPOSITION.md) and unmodified captures in native-audio-v1. The readonly views preserve revision12 and all10 sources; no mockup raster or synthetic waveform is used as product UI.
+
+The owner requested removing demonstration placements before external-agent testing. Normal Studio does not seed demo media; the final launch uses a new empty project. Acceptance fixtures and historical screenshots remain separate from that working project. Unsupported detach/fades/image placement/text/scene operations remain staged and must not appear as working controls. Next exact slice: shared editable image/layer and native scene/text composition, then professional audio detach/fades; retain physical input/DPI/A/V checks as unexecuted.

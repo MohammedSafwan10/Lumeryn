@@ -1,5 +1,6 @@
 /target/
 /.lumeryn-scratch/
+/projects/
 *.lumeryn
 *.lumeryn-wal
 *.lumeryn-shm

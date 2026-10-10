@@ -44,6 +44,10 @@ pub struct Audio {
     pub sample_rate: u32,
     pub channels: u32,
     pub start_time_micros: i64,
+    /// Full decoded length under the shared stereo 48 kHz resampling policy.
+    /// Absent on legacy imports until a placement worker verifies the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_samples_48k: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +89,41 @@ struct Stream {
     color_transfer: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AudioFrames {
+    frames: Vec<AudioFrame>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AudioFrame {
+    best_effort_timestamp_time: Option<String>,
+}
+
+fn canonical_sample_count(bytes: u64) -> Result<u64> {
+    // f32le output contains two interleaved four-byte values per sample frame.
+    if bytes == 0 || !bytes.is_multiple_of(8) {
+        return Err(Error::Media(
+            "canonical audio is empty or has a partial sample frame".into(),
+        ));
+    }
+    Ok(bytes / 8)
+}
+
+async fn count_canonical_samples(mut reader: impl AsyncRead + Unpin) -> Result<u64> {
+    let mut buffer = vec![0_u8; 64 * 1024];
+    let mut total = 0_u64;
+    loop {
+        let bytes = reader.read(&mut buffer).await?;
+        if bytes == 0 {
+            break;
+        }
+        total = total
+            .checked_add(bytes as u64)
+            .ok_or_else(|| Error::Media("canonical audio byte count overflow".into()))?;
+    }
+    canonical_sample_count(total)
+}
+
 async fn read_limited(reader: impl AsyncRead + Unpin, limit: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.take(limit + 1).read_to_end(&mut bytes).await?;
@@ -95,6 +134,168 @@ async fn read_limited(reader: impl AsyncRead + Unpin, limit: u64) -> Result<Vec<
 }
 
 impl MediaTools {
+    /// Prove a source's complete canonical PCM length without retaining its samples.
+    /// Call outside the project writer lock; this can decode an entire long asset.
+    pub async fn canonical_audio_samples(&self, path: &Path, expected_digest: &str) -> Result<u64> {
+        let path = local_file(path)?;
+        if content_hash(&path).await? != expected_digest {
+            return Err(Error::Invalid(
+                "audio source changed before sample verification".into(),
+            ));
+        }
+        let probe_args = [
+            "-v",
+            "error",
+            "-threads",
+            "2",
+            "-protocol_whitelist",
+            "file",
+            "-select_streams",
+            "a:0",
+            "-show_streams",
+            "-of",
+            "json",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .chain([path.as_os_str().to_owned()])
+        .collect::<Vec<_>>();
+        let probe: Probe = serde_json::from_slice(&self.run(&self.ffprobe, &probe_args).await?)?;
+        let stream = probe
+            .streams
+            .first()
+            .ok_or_else(|| Error::Unsupported("source has no audio stream".into()))?;
+        if !matches!(stream.channels, Some(1 | 2)) {
+            return Err(Error::Unsupported(
+                "independent audio requires mono or stereo sources".into(),
+            ));
+        }
+        if self.audio_start(&path, stream).await? != 0 {
+            return Err(Error::Unsupported(
+                "independent audio requires a zero-origin stream".into(),
+            ));
+        }
+        let args = [
+            "-hide_banner",
+            "-v",
+            "error",
+            "-nostdin",
+            "-xerror",
+            "-threads",
+            "2",
+            "-protocol_whitelist",
+            "file",
+            "-i",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .chain([path.as_os_str().to_owned()])
+        .chain(
+            [
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-sn",
+                "-dn",
+                "-af",
+                crate::audio_plan::CANONICAL_DECODE_FILTER,
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-c:a",
+                "pcm_f32le",
+                "-f",
+                "f32le",
+                "pipe:1",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .collect::<Vec<_>>();
+        let started = std::time::Instant::now();
+        let mut child = Command::new(&self.ffmpeg)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| Error::Media(format!("cannot start audio verification worker: {e}")))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Media("stdout unavailable".into()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| Error::Media("stderr unavailable".into()))?;
+        let samples = tokio::time::timeout(self.timeout, async {
+            let (samples, stderr, status) = tokio::try_join!(
+                count_canonical_samples(stdout),
+                read_limited(stderr, 1024 * 1024),
+                async { child.wait().await.map_err(Error::Io) }
+            )?;
+            if !status.success() {
+                return Err(Error::Media(format!(
+                    "audio verification {status}: {}",
+                    String::from_utf8_lossy(&stderr)
+                )));
+            }
+            Ok(samples)
+        })
+        .await
+        .map_err(|_| Error::Timeout)??;
+        if content_hash(&path).await? != expected_digest {
+            return Err(Error::Invalid(
+                "audio source changed during sample verification".into(),
+            ));
+        }
+        tracing::debug!(
+            canonical_samples = samples,
+            elapsed_ms = started.elapsed().as_millis(),
+            "canonical audio length verified"
+        );
+        Ok(samples)
+    }
+
+    async fn audio_start(&self, path: &Path, stream: &Stream) -> Result<i64> {
+        if stream.start_time.is_some() {
+            return stream_start(stream);
+        }
+        // WAV omits stream.start_time. Inspect bounded decoded-frame PTS instead of
+        // assuming zero for arbitrary demuxers or using rounded container duration.
+        let args = [
+            "-v",
+            "error",
+            "-threads",
+            "2",
+            "-protocol_whitelist",
+            "file",
+            "-select_streams",
+            "a:0",
+            "-read_intervals",
+            "%+#8",
+            "-show_frames",
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "json",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .chain([path.as_os_str().to_owned()])
+        .collect::<Vec<_>>();
+        let frames: AudioFrames = serde_json::from_slice(&self.run(&self.ffprobe, &args).await?)?;
+        let first = frames
+            .frames
+            .first()
+            .and_then(|frame| frame.best_effort_timestamp_time.as_deref())
+            .ok_or_else(|| Error::Unsupported("unknown decoded audio start time".into()))?;
+        i64::try_from(decimal_micros(first)?)
+            .map_err(|_| Error::Media("audio stream start overflow".into()))
+    }
+
     pub async fn run(&self, executable: &Path, args: &[OsString]) -> Result<Vec<u8>> {
         let started = std::time::Instant::now();
         tracing::debug!(tool = ?executable.file_name(), "starting bounded media worker");
@@ -271,24 +472,32 @@ impl MediaTools {
         } else {
             None
         };
-        let audio = probe
-            .streams
-            .iter()
-            .find(|s| s.codec_type == "audio")
-            .map(|s| {
-                Ok::<_, Error>(Audio {
-                    codec: s.codec_name.clone().unwrap_or_default(),
-                    sample_rate: s
-                        .sample_rate
-                        .as_deref()
-                        .ok_or_else(|| Error::Media("missing audio sample rate".into()))?
-                        .parse()
-                        .map_err(|_| Error::Media("invalid audio sample rate".into()))?,
-                    channels: s.channels.unwrap_or(0),
-                    start_time_micros: stream_start(s)?,
-                })
+        let mut audio = if let Some(s) = probe.streams.iter().find(|s| s.codec_type == "audio") {
+            Some(Audio {
+                codec: s.codec_name.clone().unwrap_or_default(),
+                sample_rate: s
+                    .sample_rate
+                    .as_deref()
+                    .ok_or_else(|| Error::Media("missing audio sample rate".into()))?
+                    .parse()
+                    .map_err(|_| Error::Media("invalid audio sample rate".into()))?,
+                channels: s.channels.unwrap_or(0),
+                start_time_micros: self.audio_start(&path, s).await?,
+                canonical_samples_48k: None,
             })
-            .transpose()?;
+        } else {
+            None
+        };
+        // Music-only imports need a proven length for deterministic placement defaults.
+        // Video imports retain their cheap audio metadata path; placement proves them
+        // lazily if independent audio is requested.
+        if video.is_none()
+            && let Some(audio) = &mut audio
+            && matches!(audio.channels, 1 | 2)
+            && audio.start_time_micros == 0
+        {
+            audio.canonical_samples_48k = Some(self.canonical_audio_samples(&path, &digest).await?);
+        }
         if video.is_none() && audio.is_none() {
             return Err(Error::Unsupported("no video or audio stream".into()));
         }
@@ -430,6 +639,31 @@ mod tests {
         assert_eq!(decimal_micros("1.001000")?, 1_001_000);
         assert_eq!(decimal_micros("-0.500000")?, -500_000);
         assert!(decimal_micros("NaN").is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canonical_counter_rejects_partial_and_empty_frames() -> Result<()> {
+        assert_eq!(count_canonical_samples(&[0_u8; 24][..]).await?, 3);
+        assert!(count_canonical_samples(&[0_u8; 7][..]).await.is_err());
+        assert!(count_canonical_samples(&[][..]).await.is_err());
+        assert_eq!(canonical_sample_count(u64::MAX - 7)?, (u64::MAX - 7) / 8);
+        assert!(canonical_sample_count(u64::MAX).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn old_audio_json_preserves_omitted_sample_proof() -> Result<()> {
+        let old = serde_json::json!({"codec":"pcm_s16le","sample_rate":48000,
+            "channels":2,"start_time_micros":0});
+        let mut audio: Audio = serde_json::from_value(old.clone())?;
+        assert_eq!(audio.canonical_samples_48k, None);
+        assert_eq!(serde_json::to_value(&audio)?, old);
+        audio.canonical_samples_48k = Some(48_000);
+        assert_eq!(
+            serde_json::to_value(audio)?["canonical_samples_48k"],
+            48_000
+        );
         Ok(())
     }
 }

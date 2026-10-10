@@ -1,5 +1,7 @@
 # Native drag placement acceptance
 
+Historical video milestone below. Independent audio is now integrated and verified in [AUDIO_COMPOSITION](AUDIO_COMPOSITION.md), superseding the audio-staged statements in this earlier record.
+
 Executed 2026-10-10 against the drag milestone following `a2cf04e`. Source and tests use the existing approved native rails/Inter/mint presentation.
 
 ## Passed
