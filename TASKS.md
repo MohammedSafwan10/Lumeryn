@@ -1,5 +1,12 @@
 # Task board
 
+## Private repository setup — complete
+
+- [x] Verify active GitHub account; create owner-authorized private MohammedSafwan10/Lumeryn repository and origin remote.
+- [x] Improve README with accurate implemented scope, limitations, build/CLI workflow and proprietary notices.
+- [x] Audit tracked history and strengthen `.gitignore`; validate README links,11 exclusion/exemption cases and368 catalogue paths.
+- [x] Push verified local history to master; confirm remote commit, private visibility and default branch. No public release or source license.
+
 ## Current focused milestone — import responsiveness and FPS
 
 - [x] Measure generated-fixture stages; remove the redundant candidate-CFR decode without weakening source/timestamp checks.

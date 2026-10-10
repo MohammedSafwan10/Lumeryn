@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-10-10 — owner-authorized private GitHub repository
+
+Created https://github.com/MohammedSafwan10/Lumeryn under the verified active GitHub account, explicitly PRIVATE, with origin tracking master. Pushed existing local history and README/ignore commit fd342bc; remote branch SHA matched the local commit and private visibility/default branch were rechecked. No public license, release, workflow, customer media or binaries were added. This private upload was explicitly authorized by the owner.
+
+README now describes tested scope, limitations, native build, agent workflow, acceptance and proprietary/third-party licensing. Expanded exclusions cover nested Rust targets, local output/model/cache directories, source media, SQLite databases, environment secrets and signing material. All README links resolve; 11 ignore/exemption cases and all368 tracked catalogue paths passed. All-history blob/path and common credential-pattern scans found no flagged secrets, customer media, project databases or build binaries; largest historical blob1.72MB, historical blob total30.55MB. These bounded scans are not a complete security certification. Documentation-only changes required no Rust gate rerun; existing verified implementation remains unchanged.
+
 ## 2026-10-10 — verified staged importing and explicit FPS
 
 Shared Rust service jobs now prepare media outside the writer lock with immediate native pending cards, cancellation, bounded workers/status/proof cache, atomic multi-file publication and explicit revision conflicts/retry. Candidate CFR counting and timestamp validation share one decode pass. Generated matched CLI verification returned identical metadata and reduced median780.264→446.081ms (~43% for this fixture); quick headers~25ms and verified cache~53ms. No new dependency/backend/migration. Exact-rational SetFrameRate and CLI/native selectors, first-video matching and separate source/timeline/export FPS preserve stable placed timelines. PNG and first-VFR safeguards, audio occupancy, source changes, tool policy and durable replay are tested.
