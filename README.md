@@ -1,19 +1,72 @@
 # Lumeryn
 
-Proprietary local video editing engine, agent-first Rust CLI and native Rust Studio. NEXDARK LABS is a pending business brand. No public source license is granted. The mandatory native migration supersedes all earlier Tauri/Svelte plans.
+**Local video editing for people and external agents.** A Rust engine, a discoverable JSON CLI and a native desktop Studio edit the same durable project.
 
-Users brief an external agent in ordinary language; the CLI controls deterministic editing and the Studio displays the same project for review and manual editing. Editable educational explainers remain the next creative milestone. This build provides a constrained editing/export foundation and the native Studio migration; consult PROGRESS for tested scope and remaining limitations.
+Private, proprietary software under development. No public source license is granted. Third-party dependencies, fonts and catalogue assets retain their own licenses and notices. NEXDARK LABS is a pending business brand.
 
-Build on Windows with Rust1.97.1/MSVC and locally installed FFmpeg/ffprobe:
+## Current capabilities
+
+- Native Windows Studio using egui/eframe and wgpu, with media drawers, real thumbnails, preview, waveforms and timeline dragging.
+- Shared Rust project service with SQLite/SQLx, transactions, revision-aware writes, durable undo/redo and live CLI/Studio synchronization.
+- Staged background imports with immediate pending cards, cancellation, verified source identity and bounded preparation workers.
+- Explicit rational timeline FPS and optional first-video matching. Source, timeline and export rates are separate; the timeline rate stays locked while clips exist.
+- Video insertion, reorder, trim, split, duplicate and delete; independent mono/stereo audio placement, mixing, trim, gain and mute.
+- A reviewed offline catalogue of 352 audio, graphic and font files, discoverable through both CLI and Studio.
+- Unrestricted local landscape and portrait UHD export at 24, 25, 30 and 60 FPS for the supported graph. H.264/H.265 depend on usable installed encoders; automatic hardware discovery has software fallbacks. Exports provide progress, cancellation and decoded-output verification.
+
+The current video renderer supports one contiguous matching-CFR SDR track with linked source audio and independently placed audio. Mixed source rates, editable text/vector scenes, masks, compositing, transitions, filters, recording, audio detach/fades and optional AI remain roadmap work. This is an editing foundation, not professional-editor parity. See [tested progress](PROGRESS.md) and the [feature inventory](docs/roadmap/CLIPCHAMP_FEATURE_INVENTORY.md).
+
+## Build and run
+
+Windows x64 is the currently verified desktop/service target. Install the pinned Rust toolchain from [rust-toolchain.toml](rust-toolchain.toml), MSVC build tools, and trusted local FFmpeg/ffprobe binaries available on `PATH`. FFmpeg, AI models and optional runtimes are not bundled.
 
 ```powershell
 cargo build --workspace --locked
-.\target\debug\lumeryn.exe --help
-.\target\debug\lumeryn-studio.exe --project D:\path\project.lumeryn
+cargo install --path crates/lumeryn-cli --locked
+lumeryn doctor
+lumeryn capabilities
+
+# Create a new project in a local, ignored directory.
+New-Item -ItemType Directory -Force projects/my-video
+lumeryn project create --project projects/my-video/project.lumeryn --name "My video" --preset landscape --fps 30
+.\target\debug\lumeryn-studio.exe --project projects/my-video/project.lumeryn
+```
+
+Keep the built CLI and Studio binaries together. The authoritative service starts automatically in a hidden process; the CLI also works headlessly. There is no Node.js, WebView, mandatory cloud database or embedded agent runtime. Installers and automatic updates are not shipped yet.
+
+## Agent workflow
+
+```powershell
+lumeryn --help
+lumeryn capabilities
+lumeryn schema
+lumeryn schema --kind render
+lumeryn project inspect --project projects/my-video/project.lumeryn
+lumeryn media import-start --help
+lumeryn media import-status --help
+lumeryn project batch --help
+```
+
+Select every project explicitly with `--project`. Inspect the current revision before writing and pass `--expected-revision`; dry-run atomic batches before applying them. Only verified media can be placed. Sources are never modified. Export to a new path and check the reported verification. Follow the [CLI workflows](docs/cli/WORKFLOWS.md) and [agent handoff](docs/cli/AGENT_QUICKSTART.md) for commands and errors.
+
+Media stays on disk, outside the project database. Use `project backup` for consistent backups; copying a live WAL database alone is unsafe. Legacy schema-1 projects require explicit backup/migration before new edits.
+
+## Verification
+
+```powershell
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --locked
 .\scripts\check.ps1 -Media -Deny
 .\scripts\native-smoke.ps1
 ```
 
-Keep both binaries together. The shared project service is launched automatically in a hidden process and releases its project writer when idle. Studio uses egui/eframe/egui_dock and wgpu, with no Node.js or WebView dependency. The CLI works without launching Studio. Optional models and runtimes are not installed automatically. No installer or automatic updater is shipped yet.
+Media checks require configured FFmpeg/ffprobe; native smoke opens an actual window on disposable generated footage. Executed evidence and outstanding physical/device checks are recorded in [native acceptance](docs/testing/NATIVE_ACCEPTANCE.md), [import/FPS acceptance](docs/testing/NATIVE_IMPORT_FPS.md) and [audio composition acceptance](docs/testing/AUDIO_COMPOSITION.md). A successful launch alone is not acceptance.
 
-See [CLI workflows](docs/cli/WORKFLOWS.md), [actual progress](PROGRESS.md), [task board](TASKS.md), [architecture](ARCHITECTURE.md), and [complete product requirements](docs/PRODUCT_SPEC.md). The native editor has left/right drawers, real preview/waveforms, basic clip operations, shared durable undo/redo, same-project clip copy/paste, project-local media names/removal, canvas choices and a reviewed offline asset library with audio audition/independent audio placement, body move, edge trim and volume/mute Inspector controls. Export supports unrestricted landscape/portrait UHD,24/25/30/60FPS, installed H.264/H.265 encoders, quality/bitrate and automatic hardware discovery with software fallback. The graph remains one contiguous matching-CFR SDR video track with embedded audio/silence and independently placed mono/stereo music/voiceover mixed through one preview/export plan; native text/scenes/masks/effects/detach/fades are future slices. Schema-1 projects stay readable; create a consistent backup and explicitly upgrade before new edits. [Editor acceptance](docs/testing/CLIPCHAMP_FOUNDATION.md) and [history/clipboard acceptance](docs/testing/HISTORY_CLIPBOARD.md) and [native panel/media acceptance](docs/testing/STUDIO_POLISH.md) distinguish tested functionality from professional-editor parity.
+## Project documentation
+
+- [Product requirements](docs/PRODUCT_SPEC.md), [architecture](ARCHITECTURE.md) and [architecture decisions](docs/adr/).
+- [Task board](TASKS.md), [progress](PROGRESS.md) and [engineering instructions](AGENTS.md).
+- [Security boundaries](SECURITY.md), [dependency licensing](docs/licensing/DEPENDENCIES.md), [media licensing](docs/licensing/MEDIA.md) and [asset provenance](docs/licensing/ASSET_LIBRARY.md).
+
+Do not commit credentials, customer media, project databases, generated renders or build outputs. Reviewed catalogue files and historical synthetic design/test evidence are intentionally tracked. FFmpeg distribution, codec patents and native/model licensing require separate review before commercial distribution.
