@@ -87,7 +87,7 @@ try {
     $nativeMetrics['binaries'] = @{cli_sha256=(Get-FileHash -LiteralPath $nativeCli -Algorithm SHA256).Hash;studio_sha256=(Get-FileHash -LiteralPath $nativeStudio -Algorithm SHA256).Hash}
     Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'process-metrics.json') -Value $nativeMetrics -Depth 10
     if ($nativeProcess.ExitCode -ne 0 -or -not $nativeReport.passed) { throw ('Native smoke failed; inspect ' + $nativeDirectory) }
-    if ($History -and (-not $nativeReport.history_clipboard_acceptance -or @($nativeReport.checks | Where-Object check -eq 'native_shared_history_step').Count -ne 8)) { throw 'Eight native history/clipboard transitions were not verified' }
+    if ($History -and (-not $nativeReport.history_clipboard_acceptance -or @($nativeReport.checks | Where-Object check -eq 'native_shared_history_step').Count -ne 12)) { throw 'Twelve native history/clipboard/media-name transitions were not verified' }
     if ($Uhd) {
         $expectedWidth = if ($Portrait) { 2160 } else { 3840 }
         $expectedHeight = if ($Portrait) { 3840 } else { 2160 }

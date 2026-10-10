@@ -11,6 +11,7 @@ fn fixture() -> Result<(Project, Uuid)> {
     project.media.push(Media {
         id,
         path: "source.mp4".into(),
+        alias: None,
         metadata: Metadata {
             size_bytes: 1,
             blake3: None,

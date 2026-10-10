@@ -32,6 +32,7 @@ fn fixture() -> Result<Project> {
     let mut project = Project::new("IPC fixture".into(), 64, 64, "30/1".parse::<FrameRate>()?)?;
     let media_id = Uuid::new_v4();
     project.media.push(Media {
+        alias: None,
         id: media_id,
         path: PathBuf::from("source.mp4"),
         metadata: Metadata {

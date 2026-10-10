@@ -377,6 +377,9 @@ impl Store {
                     Edit::TrimClip { clip_id, .. }
                     | Edit::DeleteClip { clip_id, .. }
                     | Edit::ReorderClip { clip_id, .. } => object_ids.push(*clip_id),
+                    Edit::RenameMedia { media_id, .. } | Edit::RemoveMedia { media_id } => {
+                        object_ids.push(*media_id)
+                    }
                     Edit::SplitClip {
                         clip_id,
                         right_clip_id,
@@ -768,24 +771,26 @@ fn search_records(project: &Project) -> Vec<(String, String, String)> {
         project.name.clone(),
     )];
     records.extend(project.media.iter().map(|media| {
-        (
-            media.id.to_string(),
-            "media".into(),
-            format!(
-                "{} {} {}",
-                media.path.display(),
-                media
-                    .metadata
-                    .video
-                    .as_ref()
-                    .map_or("", |v| v.codec.as_str()),
-                media
-                    .metadata
-                    .audio
-                    .as_ref()
-                    .map_or("", |a| a.codec.as_str())
-            ),
-        )
+        // Preserve legacy derived-index text exactly when alias is absent.
+        let mut text = format!(
+            "{} {} {}",
+            media.path.display(),
+            media
+                .metadata
+                .video
+                .as_ref()
+                .map_or("", |v| v.codec.as_str()),
+            media
+                .metadata
+                .audio
+                .as_ref()
+                .map_or("", |a| a.codec.as_str())
+        );
+        if let Some(alias) = &media.alias {
+            text.push(' ');
+            text.push_str(alias);
+        }
+        (media.id.to_string(), "media".into(), text)
     }));
     records
 }
@@ -859,6 +864,7 @@ pub async fn prepare_imports(
                 Some(Media {
                     id: *id,
                     path: reference,
+                    alias: None,
                     metadata,
                 })
             }

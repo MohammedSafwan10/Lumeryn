@@ -69,6 +69,24 @@ Copy is read-only and emits `result.clipboard`, a strict version-1 payload conta
 
 Clipboard JSON is read with a 16 KiB bound, rejects unknown fields, malformed digests, unsupported versions/rates, missing media, source-range overflow and ID collisions. It contains no source path or executable text; cross-project asset transfer remains staged. If a paste omits `--expected-revision`, the CLI captures the current revision before submitting it. Exact keyed retries bind the entire clipboard payload and return the original receipt even after later undo removes that media; changed payloads with the same key fail. Source files remain immutable references, and actual file identity is checked by project asset checks/rendering.
 
+## Media display names and project-only removal
+
+```powershell
+lumeryn media list --project project.lumeryn
+lumeryn media inspect --project project.lumeryn --media-id MEDIA_UUID
+lumeryn media rename --project project.lumeryn --media-id MEDIA_UUID --name "Opening shot" --expected-revision 5 --dry-run
+lumeryn media rename --project project.lumeryn --media-id MEDIA_UUID --name "Opening shot" --expected-revision 5 --idempotency-key alias-001
+lumeryn media rename --project project.lumeryn --media-id MEDIA_UUID --reset --expected-revision 6
+lumeryn media remove --project project.lumeryn --media-id UNUSED_MEDIA_UUID --expected-revision 7 --dry-run
+lumeryn media remove --project project.lumeryn --media-id UNUSED_MEDIA_UUID --expected-revision 7 --idempotency-key remove-001
+```
+
+`media list` returns the committed revision and imported media; `media inspect` returns one entry. Entries preserve `id`, original `path` and source `metadata`, and add `alias` (null when unset), `display_name` and timeline `usage_count`. These reads do not probe source files. Display names use the alias when present, otherwise the source filename stem with underscores displayed as spaces. Source paths, IDs, byte identity and cache identity do not change when renamed. Metadata search includes aliases while retaining original paths.
+
+Rename requires exactly one of `--name` or `--reset`. Aliases preserve accepted text exactly, including multilingual text and punctuation; blank/whitespace-only names, control characters and names longer than 256 UTF-8 bytes fail. Duplicate display names are allowed; use stable media IDs to select references. Reset clears the alias. Rename and remove support revision/idempotency flags, `--dry-run`, and shared undo/redo. The optional alias preserves older graph-schema-1 projects without a migration.
+
+Remove changes the project reference only and never deletes source or cache files. Referenced media fails with its clip count; it never cascades to timeline clips. To remove clips and their media together, dry-run an atomic batch with explicit `delete_clip` operations before `remove_media`, then commit at the same expected revision. A failure rolls back the entire batch. JSON operations are `{"operation":"rename_media","media_id":"MEDIA_UUID","alias":"Opening shot"}` (null resets) and `{"operation":"remove_media","media_id":"MEDIA_UUID"}`. Undo can restore a removed reference, but sources remain external files and must still be available for playback/rendering.
+
 ## Atomic edits and safe retries
 
 `lumeryn schema` generates draft2020-12 JSON Schema for `Batch` from shared Rust types; semantic validation additionally checks ranges, identities, references, rates and revision constraints. Example JSON file (replace IDs and path):
@@ -93,7 +111,7 @@ Semantic success emits one JSON object to stdout: `ok`, request ID, elapsed mill
 
 Database graph schema1 and storage index version1 are distinct. Older storage version0 can be inspected without automatic migration; use `project backup` then `project migrate` explicitly to add FTS5. Migrations retain editing revisions/history and reject unsupported versions. `project check` validates SQLite, project/history continuity and metadata index; `--assets` also checks sources. Backup uses a consistent SQLite snapshot with integrity verification; it references rather than copies media. Cross-directory backups rebase relative references to the original assets, so a database alone is not a self-contained asset package. Relinking/missing-digest upgrades and owner-mediated corruption repair are future capabilities; never delete or repair a user's database silently.
 
-Native Studio and its preview worker share project revision events with the CLI through the authoritative Windows service. The baseline export runs as a cancellable service job. Media aliases/project-only removal, resource estimates, native scenes/text/vector/animations, captions, AI voice, Blender, professional mixing, proxies and multi-track effects remain staged. Do not invoke invented syntax or present unsupported features as available. External agents may plan briefs/storyboards and licensed assets now, but the creative acceptance demos require the roadmap's implemented scene/audio/preview capabilities. Verify every final render's actual visuals/audio rather than inferring artistic quality from JSON success.
+Native Studio and its preview worker share project revision events with the CLI through the authoritative Windows service. The baseline export runs as a cancellable service job. Resource estimates, native scenes/text/vector/animations, captions, AI voice, Blender, professional mixing, proxies and multi-track effects remain staged. Do not invoke invented syntax or present unsupported features as available. External agents may plan briefs/storyboards and licensed assets now, but the creative acceptance demos require the roadmap's implemented scene/audio/preview capabilities. Verify every final render's actual visuals/audio rather than inferring artistic quality from JSON success.
 
 `./scripts/demo.ps1` generates legally usable synthetic fixtures and executes the real baseline; it is a technical acceptance demonstration, not one of the creative product demos.
 

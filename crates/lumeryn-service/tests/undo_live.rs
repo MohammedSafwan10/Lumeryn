@@ -36,6 +36,7 @@ fn fixture() -> Result<Project> {
     let mut project = Project::new("History fixture".into(), 64, 64, "30/1".parse()?)?;
     let media_id = Uuid::new_v4();
     project.media.push(Media {
+        alias: None,
         id: media_id,
         path: "source.mp4".into(),
         metadata: Metadata {

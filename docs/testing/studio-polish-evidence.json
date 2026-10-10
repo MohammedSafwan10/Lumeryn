@@ -1,0 +1,1484 @@
+{
+  "date": "2026-10-10",
+  "full_gate": ".lumeryn-scratch/media-studio-verified-gate.log",
+  "distinct_tests": 119,
+  "default_tests": 94,
+  "additional_tests": 25,
+  "gate_sha256": "2A7128266EAB94DA9BFE9AB917FF802AFD8F98607594D7830917DEF36FA4917C",
+  "build": ".lumeryn-scratch/media-studio-verified-build.log",
+  "build_sha256": "2F52D46680C0F17B813F1E8A3522D1DEF84A0B2E2CEE49BABF474D8115DFB82F",
+  "native": {
+    "adapter": "NVIDIA GeForce RTX 3050 · Vulkan",
+    "asset_capture_wait_expired": false,
+    "asset_evidence": {
+      "complete": true,
+      "failed_assets": 0,
+      "thumbnails": 1,
+      "waveforms": 1
+    },
+    "checks": [
+      {
+        "check": "existing_project_loaded",
+        "evidence": {
+          "clips": 1,
+          "id": "92784c6e-16ab-499b-b18f-5d6d4ec52f34",
+          "revision": 3
+        },
+        "passed": true
+      },
+      {
+        "check": "native_gpu_frame",
+        "evidence": {
+          "frame": [
+            3,
+            0
+          ],
+          "presented": 1
+        },
+        "passed": true
+      },
+      {
+        "check": "playback_advanced",
+        "evidence": {
+          "frame": [
+            3,
+            7
+          ],
+          "new_frames": 7
+        },
+        "passed": true
+      },
+      {
+        "check": "pause_and_exact_seek",
+        "evidence": {
+          "frame": 30
+        },
+        "passed": true
+      },
+      {
+        "check": "frame_step",
+        "evidence": {
+          "frame": 31
+        },
+        "passed": true
+      },
+      {
+        "check": "studio_trim_committed",
+        "evidence": {
+          "duration": 59,
+          "revision": 4
+        },
+        "passed": true
+      },
+      {
+        "check": "cli_edit_live_event",
+        "evidence": {
+          "restored_duration": 60,
+          "revision": 5
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 1,
+          "frames": 59,
+          "media": null,
+          "native_presented": [
+            6,
+            0
+          ],
+          "operation": "Undo",
+          "revision": 6
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 1,
+          "frames": 60,
+          "media": null,
+          "native_presented": [
+            7,
+            0
+          ],
+          "operation": "Redo",
+          "revision": 7
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 2,
+          "frames": 120,
+          "media": null,
+          "native_presented": [
+            8,
+            0
+          ],
+          "operation": "Paste clip",
+          "revision": 8
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 1,
+          "frames": 60,
+          "media": null,
+          "native_presented": [
+            9,
+            0
+          ],
+          "operation": "Undo",
+          "revision": 9
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 2,
+          "frames": 120,
+          "media": null,
+          "native_presented": [
+            10,
+            0
+          ],
+          "operation": "Redo",
+          "revision": 10
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 1,
+          "frames": 60,
+          "media": null,
+          "native_presented": [
+            11,
+            0
+          ],
+          "operation": "Delete clip",
+          "revision": 11
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 2,
+          "frames": 120,
+          "media": null,
+          "native_presented": [
+            12,
+            0
+          ],
+          "operation": "Undo",
+          "revision": 12
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 1,
+          "frames": 60,
+          "media": null,
+          "native_presented": [
+            13,
+            0
+          ],
+          "operation": "Redo",
+          "revision": 13
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 1,
+          "frames": 60,
+          "media": {
+            "alias": "Opening shot",
+            "id": "07459a50-8b90-492c-a073-58d27dc3f153"
+          },
+          "native_presented": [
+            14,
+            0
+          ],
+          "operation": "Rename media",
+          "revision": 14
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 1,
+          "frames": 60,
+          "media": {
+            "alias": null,
+            "id": "07459a50-8b90-492c-a073-58d27dc3f153"
+          },
+          "native_presented": [
+            15,
+            0
+          ],
+          "operation": "Undo",
+          "revision": 15
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 1,
+          "frames": 60,
+          "media": {
+            "alias": "Opening shot",
+            "id": "07459a50-8b90-492c-a073-58d27dc3f153"
+          },
+          "native_presented": [
+            16,
+            0
+          ],
+          "operation": "Redo",
+          "revision": 16
+        },
+        "passed": true
+      },
+      {
+        "check": "native_shared_history_step",
+        "evidence": {
+          "clips": 1,
+          "frames": 60,
+          "media": {
+            "alias": null,
+            "id": "07459a50-8b90-492c-a073-58d27dc3f153"
+          },
+          "native_presented": [
+            17,
+            0
+          ],
+          "operation": "Rename media",
+          "revision": 17
+        },
+        "passed": true
+      },
+      {
+        "check": "background_export",
+        "evidence": {
+          "output": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\studio-a6cd9d07e7de4f47a3fb5fd1e19e90c1\\studio-smoke-export.mp4",
+          "service_job_completed": true,
+          "ui_updates_while_export": 252
+        },
+        "passed": true
+      },
+      {
+        "check": "native_window_screenshot",
+        "evidence": {
+          "path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\studio-a6cd9d07e7de4f47a3fb5fd1e19e90c1\\studio-native.png"
+        },
+        "passed": true
+      }
+    ],
+    "elapsed_ms": 7237.7475,
+    "error": null,
+    "first_frame_ms": 674.4671,
+    "frame_uploads": 22,
+    "history_clipboard_acceptance": true,
+    "last_cpu_upload_submission_ms": 0.8928999999999999,
+    "limitations": [
+      "Scripted actions call the same UI command paths; pointer usability and native file-dialog cancellation are separate manual acceptance.",
+      "CPU upload timing does not measure GPU completion or photon latency.",
+      "VRAM consumption is unknown without telemetry.",
+      "Audio device status alone does not prove end-to-end A/V tolerance.",
+      "Effects, multi-track composition and proxies remain staged; physical clipboard and keyboard checks remain pending. Thumbnail/waveform caches are bounded; readiness/counts are reported independently of workflow success."
+    ],
+    "max_ui_update_ms": 83.1219,
+    "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\studio-a6cd9d07e7de4f47a3fb5fd1e19e90c1\\studio-native.png",
+    "passed": true,
+    "presented_frames": 22,
+    "preview": {
+      "audio_status": "Ready { sample_rate: 48000, channels: 2 }",
+      "decode_ms": 41.8369,
+      "decoded_frames": 23,
+      "dropped_frames": 0,
+      "seek_ms": 52.4284
+    },
+    "project_revision": 17,
+    "render_result": {
+      "duration_seconds": 2.0,
+      "encoder": "h264_nvenc",
+      "fallback_reason": null,
+      "frame_rate": "60/1",
+      "frames": 120,
+      "hardware": true,
+      "height": 2160,
+      "options": {
+        "acceleration": "auto",
+        "bitrate_kbps": null,
+        "codec": "h264",
+        "fps": 60,
+        "quality": "balanced",
+        "resolution": "uhd2160"
+      },
+      "path": "\\\\?\\D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\studio-a6cd9d07e7de4f47a3fb5fd1e19e90c1\\studio-smoke-export.mp4",
+      "preset": "h264-aac",
+      "project_revision": 17,
+      "upscaled": true,
+      "verified_full_decode": true,
+      "width": 3840
+    },
+    "schema_version": 1,
+    "screenshot_assets": {
+      "complete": true,
+      "failed_assets": 0,
+      "thumbnails": 1,
+      "waveforms": 1
+    },
+    "screenshot_saved": true,
+    "ui_update_p50_ms": 1.5938,
+    "ui_update_p95_ms": 4.3619,
+    "ui_update_samples": 415,
+    "ui_updates": 416,
+    "viewport": {
+      "logical_height": 1000.0,
+      "logical_width": 1600.0,
+      "pixels_per_point": 1.0
+    }
+  },
+  "output": {
+    "limits": "720p synthetic source is upscaled; source-detail and marker-sync acceptance belongs to uhd_export tests. Physical speaker/display synchronization is untested.",
+    "passed": true,
+    "probe": {
+      "streams": [
+        {
+          "index": 0,
+          "codec_name": "h264",
+          "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+          "profile": "Main",
+          "codec_type": "video",
+          "codec_tag_string": "avc1",
+          "codec_tag": "0x31637661",
+          "mime_codec_string": "avc1.4d4034",
+          "width": 3840,
+          "height": 2160,
+          "coded_width": 3840,
+          "coded_height": 2160,
+          "has_b_frames": 2,
+          "sample_aspect_ratio": "1:1",
+          "display_aspect_ratio": "16:9",
+          "pix_fmt": "yuv420p",
+          "level": 52,
+          "chroma_location": "left",
+          "field_order": "progressive",
+          "is_avc": "true",
+          "nal_length_size": "4",
+          "id": "0x1",
+          "r_frame_rate": "60/1",
+          "avg_frame_rate": "60/1",
+          "time_base": "1/15360",
+          "start_pts": 0,
+          "start_time": "0.000000",
+          "duration_ts": 30720,
+          "duration": "2.000000",
+          "bit_rate": "32335360",
+          "bits_per_raw_sample": "8",
+          "nb_frames": "120",
+          "extradata_size": 55,
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0,
+            "non_diegetic": 0,
+            "captions": 0,
+            "descriptions": 0,
+            "metadata": 0,
+            "dependent": 0,
+            "still_image": 0,
+            "multilayer": 0
+          },
+          "tags": {
+            "language": "und",
+            "handler_name": "VideoHandler",
+            "encoder": "Lavc62.28.101 h264_nvenc"
+          }
+        },
+        {
+          "index": 1,
+          "codec_name": "aac",
+          "codec_long_name": "AAC (Advanced Audio Coding)",
+          "profile": "LC",
+          "codec_type": "audio",
+          "codec_tag_string": "mp4a",
+          "codec_tag": "0x6134706d",
+          "mime_codec_string": "mp4a.40.2",
+          "sample_fmt": "fltp",
+          "sample_rate": "48000",
+          "channels": 2,
+          "channel_layout": "stereo",
+          "bits_per_sample": 0,
+          "initial_padding": 0,
+          "id": "0x2",
+          "r_frame_rate": "0/0",
+          "avg_frame_rate": "0/0",
+          "time_base": "1/48000",
+          "start_pts": 0,
+          "start_time": "0.000000",
+          "duration_ts": 96000,
+          "duration": "2.000000",
+          "bit_rate": "191707",
+          "nb_frames": "95",
+          "extradata_size": 5,
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0,
+            "non_diegetic": 0,
+            "captions": 0,
+            "descriptions": 0,
+            "metadata": 0,
+            "dependent": 0,
+            "still_image": 0,
+            "multilayer": 0
+          },
+          "tags": {
+            "language": "und",
+            "handler_name": "SoundHandler"
+          }
+        }
+      ],
+      "format": {
+        "filename": "\\\\?\\D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\studio-a6cd9d07e7de4f47a3fb5fd1e19e90c1\\studio-smoke-export.mp4",
+        "nb_streams": 2,
+        "nb_programs": 0,
+        "nb_stream_groups": 0,
+        "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+        "format_long_name": "QuickTime / MOV",
+        "start_time": "0.000000",
+        "duration": "2.000000",
+        "size": "8136911",
+        "bit_rate": "32547644",
+        "probe_score": 100,
+        "tags": {
+          "major_brand": "isom",
+          "minor_version": "512",
+          "compatible_brands": "isomiso2avc1mp41",
+          "encoder": "Lavf62.12.101"
+        }
+      }
+    },
+    "portrait": false,
+    "render_result": {
+      "duration_seconds": 2.0,
+      "encoder": "h264_nvenc",
+      "fallback_reason": null,
+      "frame_rate": "60/1",
+      "frames": 120,
+      "hardware": true,
+      "height": 2160,
+      "options": {
+        "acceleration": "auto",
+        "bitrate_kbps": null,
+        "codec": "h264",
+        "fps": 60,
+        "quality": "balanced",
+        "resolution": "uhd2160"
+      },
+      "path": "\\\\?\\D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\studio-a6cd9d07e7de4f47a3fb5fd1e19e90c1\\studio-smoke-export.mp4",
+      "preset": "h264-aac",
+      "project_revision": 17,
+      "upscaled": true,
+      "verified_full_decode": true,
+      "width": 3840
+    }
+  },
+  "captures": {
+    "schema_version": 1,
+    "capture_passed": true,
+    "visual_review": "pending",
+    "directory": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8",
+    "project": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-studio-demo-9344fa87d38947e38e363f97ffb533cd\\project.lumeryn",
+    "revision_before": 3,
+    "revision_after": 3,
+    "revision_unchanged": true,
+    "assets_before": {
+      "foreign_keys": "ok",
+      "history": "ok",
+      "project_invariants": "ok",
+      "revision": 3,
+      "source_assets": {
+        "count": 8,
+        "status": "verified"
+      },
+      "sqlite_integrity": "ok",
+      "storage_version": 1
+    },
+    "assets_after": {
+      "foreign_keys": "ok",
+      "history": "ok",
+      "project_invariants": "ok",
+      "revision": 3,
+      "source_assets": {
+        "count": 8,
+        "status": "verified"
+      },
+      "sqlite_integrity": "ok",
+      "storage_version": 1
+    },
+    "states": [
+      {
+        "name": "active",
+        "state": "active",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 1440,
+        "requested_logical_height": 900,
+        "actual_viewport": {
+          "logical_height": 900.0,
+          "logical_width": 1440.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 1440,
+        "physical_height": 900,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\active\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": false,
+            "physical_height": 900,
+            "physical_width": 1440,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 900.0,
+              "logical_width": 1440.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1701.0545000000002,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\active\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 900.0,
+            "logical_width": 1440.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\active\\screenshot-capture.png",
+        "screenshot_sha256": "9D4920CF8BD7BC29D760808511834BBDE147E06B6630149A5E15D0F9E8007F9E"
+      },
+      {
+        "name": "compact",
+        "state": "inspector",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 980,
+        "requested_logical_height": 640,
+        "actual_viewport": {
+          "logical_height": 640.0,
+          "logical_width": 980.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 980,
+        "physical_height": 640,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\compact\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": false,
+            "physical_height": 640,
+            "physical_width": 980,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 640.0,
+              "logical_width": 980.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1401.6614,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\compact\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 640.0,
+            "logical_width": 980.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\compact\\screenshot-capture.png",
+        "screenshot_sha256": "9CB8A85787B6BB699B134FFCAF09FEA89181A01C300406FE18112F9561682EB1"
+      },
+      {
+        "name": "project",
+        "state": "project",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 1440,
+        "requested_logical_height": 900,
+        "actual_viewport": {
+          "logical_height": 900.0,
+          "logical_width": 1440.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 1440,
+        "physical_height": 900,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\project\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": false,
+            "physical_height": 900,
+            "physical_width": 1440,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 900.0,
+              "logical_width": 1440.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1694.4732999999999,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\project\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 900.0,
+            "logical_width": 1440.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\project\\screenshot-capture.png",
+        "screenshot_sha256": "2FAB8FEE381CA7146619705A40DBFE6D640475FBA5E73477B91156B0F5833163"
+      },
+      {
+        "name": "export-compact",
+        "state": "export",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 980,
+        "requested_logical_height": 640,
+        "actual_viewport": {
+          "logical_height": 640.0,
+          "logical_width": 980.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 980,
+        "physical_height": 640,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\export-compact\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": false,
+            "physical_height": 640,
+            "physical_width": 980,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 640.0,
+              "logical_width": 980.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1424.4474999999998,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\export-compact\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 640.0,
+            "logical_width": 980.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\export-compact\\screenshot-capture.png",
+        "screenshot_sha256": "E34FD276B59EF58DF58F44FD9D4B8112A0BBCD7A29BD3A251338861479BC467A"
+      },
+      {
+        "name": "export",
+        "state": "export",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 1440,
+        "requested_logical_height": 900,
+        "actual_viewport": {
+          "logical_height": 900.0,
+          "logical_width": 1440.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 1440,
+        "physical_height": 900,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\export\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": false,
+            "physical_height": 900,
+            "physical_width": 1440,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 900.0,
+              "logical_width": 1440.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1472.2184,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\export\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 900.0,
+            "logical_width": 1440.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\export\\screenshot-capture.png",
+        "screenshot_sha256": "25692BE084A93DD0186BDBB28EA6EDEAAC04443276764325BAA8AC28A1256633"
+      },
+      {
+        "name": "tools",
+        "state": "tools",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 1280,
+        "requested_logical_height": 800,
+        "actual_viewport": {
+          "logical_height": 800.0,
+          "logical_width": 1280.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 1280,
+        "physical_height": 800,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\tools\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": false,
+            "physical_height": 800,
+            "physical_width": 1280,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 800.0,
+              "logical_width": 1280.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1551.4071000000001,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\tools\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 800.0,
+            "logical_width": 1280.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\tools\\screenshot-capture.png",
+        "screenshot_sha256": "D4871F97019E4B8FD5EC5A2A3D0E0336A855FBF62F7E9DC552C8F2030EE82C8A"
+      },
+      {
+        "name": "empty",
+        "state": "empty",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 1280,
+        "requested_logical_height": 800,
+        "actual_viewport": {
+          "logical_height": 800.0,
+          "logical_width": 1280.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 1280,
+        "physical_height": 800,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\empty\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": false,
+            "failed_assets": 0,
+            "thumbnails": 0,
+            "waveforms": 0
+          },
+          "capture": {
+            "assets": {
+              "complete": false,
+              "failed_assets": 0,
+              "thumbnails": 0,
+              "waveforms": 0
+            },
+            "native_fullscreen": false,
+            "physical_height": 800,
+            "physical_width": 1280,
+            "playhead_frame": 0,
+            "presented_frame": null,
+            "project_revision": null,
+            "viewport": {
+              "logical_height": 800.0,
+              "logical_width": 1280.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 718.4179,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\empty\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 0,
+          "presented_frame": null,
+          "project_revision": null,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 800.0,
+            "logical_width": 1280.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\empty\\screenshot-capture.png",
+        "screenshot_sha256": "C3C004B3B4602251275E137EE6FD1E78F2FAB3128B04DA11B30AF274959D87BF"
+      },
+      {
+        "name": "library",
+        "state": "library",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 1440,
+        "requested_logical_height": 900,
+        "actual_viewport": {
+          "logical_height": 900.0,
+          "logical_width": 1440.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 1440,
+        "physical_height": 900,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\library\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": false,
+            "physical_height": 900,
+            "physical_width": 1440,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 900.0,
+              "logical_width": 1440.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1659.038,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\library\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 900.0,
+            "logical_width": 1440.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\library\\screenshot-capture.png",
+        "screenshot_sha256": "4DE39555DA53DEC688627B1D4BA2CF43687C8AF40A9864B4487E5059F75FA168"
+      },
+      {
+        "name": "library-audio",
+        "state": "library-audio",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 1440,
+        "requested_logical_height": 900,
+        "actual_viewport": {
+          "logical_height": 900.0,
+          "logical_width": 1440.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 1440,
+        "physical_height": 900,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\library-audio\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": false,
+            "physical_height": 900,
+            "physical_width": 1440,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 900.0,
+              "logical_width": 1440.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1705.4946,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\library-audio\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 900.0,
+            "logical_width": 1440.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\library-audio\\screenshot-capture.png",
+        "screenshot_sha256": "66A57F42B20DD51346E8056AF330A192103DE62B44502A53974FA4801FCB9770"
+      },
+      {
+        "name": "collapsed",
+        "state": "collapsed",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 980,
+        "requested_logical_height": 640,
+        "actual_viewport": {
+          "logical_height": 640.0,
+          "logical_width": 980.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 980,
+        "physical_height": 640,
+        "requested_bounds_matched": true,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\collapsed\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": false,
+            "physical_height": 640,
+            "physical_width": 980,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 640.0,
+              "logical_width": 980.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1361.0127,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\collapsed\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 640.0,
+            "logical_width": 980.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\collapsed\\screenshot-capture.png",
+        "screenshot_sha256": "13FFB4A250458932073A3FB289B47DEB4B1712043A19D0896E57F24CEBC33064"
+      },
+      {
+        "name": "fullscreen",
+        "state": "fullscreen",
+        "capture_passed": true,
+        "visual_review": "pending",
+        "revision_before": 3,
+        "revision_after": 3,
+        "revision_unchanged": true,
+        "requested_frame": 720,
+        "requested_logical_width": 1440,
+        "requested_logical_height": 900,
+        "actual_viewport": {
+          "logical_height": 1080.0,
+          "logical_width": 1920.0,
+          "pixels_per_point": 1.0
+        },
+        "physical_width": 1920,
+        "physical_height": 1080,
+        "requested_bounds_matched": false,
+        "report_path": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\fullscreen\\studio-capture.json",
+        "report": {
+          "asset_capture_wait_expired": false,
+          "asset_evidence": {
+            "complete": true,
+            "failed_assets": 0,
+            "thumbnails": 8,
+            "waveforms": 8
+          },
+          "capture": {
+            "assets": {
+              "complete": true,
+              "failed_assets": 0,
+              "thumbnails": 8,
+              "waveforms": 8
+            },
+            "native_fullscreen": true,
+            "physical_height": 1080,
+            "physical_width": 1920,
+            "playhead_frame": 720,
+            "presented_frame": [
+              3,
+              720
+            ],
+            "project_revision": 3,
+            "viewport": {
+              "logical_height": 1080.0,
+              "logical_width": 1920.0,
+              "pixels_per_point": 1.0
+            }
+          },
+          "capture_only": true,
+          "elapsed_ms": 1952.972,
+          "error": null,
+          "limitations": [
+            "Capture records actual native pixels; it does not verify editing workflows or pointer usability.",
+            "Assets can fail or exceed the bounded wait; readiness and counts are reported independently of capture success.",
+            "Concurrent external edits may change the project; this capture path submits no editing commands."
+          ],
+          "native_screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\fullscreen\\screenshot-capture.png",
+          "passed": true,
+          "playhead_frame": 720,
+          "presented_frame": [
+            3,
+            720
+          ],
+          "project_revision": 3,
+          "schema_version": 1,
+          "screenshot_saved": true,
+          "session_error": null,
+          "viewport": {
+            "logical_height": 1080.0,
+            "logical_width": 1920.0,
+            "pixels_per_point": 1.0
+          }
+        },
+        "screenshot": "D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\b-states-c81d812c18f7468db262646ad82703e8\\fullscreen\\screenshot-capture.png",
+        "screenshot_sha256": "B67816379E2B3EB476CAABE1EC635790E04207E8F8EE336CE5F2694A4C6A13AD"
+      }
+    ],
+    "build_skipped": true,
+    "binaries": {
+      "studio_sha256": "F0F5B8A24CD9E607E6CD44E1F00AE39A6EF87D4F66B8DD0D6726579A72C3D4E3",
+      "cli_sha256": "0DF426C720B17380DE3A1934C34F50751ED6949414FC985498A898A1E46139D7"
+    },
+    "limitations": [
+      "Native captures require visual comparison with approved B; success does not prove pointer/dialog usability.",
+      "Capture-only submits no edits; unchanged revisions and source checks detect ordinary concurrent changes, not hostile change-and-restore races.",
+      "SkipBuild uses existing binaries and does not prove current source correspondence or full-gate verification.",
+      "DPI/window-manager constraints can change actual viewport bounds. Inspect recorded dimensions and assets instead of inferring requested-size acceptance."
+    ]
+  },
+  "visual_review": "Lead inspected all eleven readonly states and the actual native workflow PNG. Export, Project, compact layout and ordinary plain zeros accepted at100% DPI; physical input/highDPI remain separate.",
+  "source_hashes": [
+    {
+      "path": "apps/lumeryn-studio/src/app.rs",
+      "sha256": "23FA8CABEAEBB077FCE8DF043579B6023A221E09BA0876448A36C056E98CF39D"
+    },
+    {
+      "path": "apps/lumeryn-studio/src/design.rs",
+      "sha256": "7ED25E01F920B2DAC63E1B5526352A42A128A70ADA31EF62C61C77449782EEEE"
+    },
+    {
+      "path": "apps/lumeryn-studio/src/main.rs",
+      "sha256": "24976BE18C8D0B5A430BA94E52859ABBDDCF84E80769B4710E6D90904A9338EA"
+    },
+    {
+      "path": "apps/lumeryn-studio/src/smoke.rs",
+      "sha256": "270ED0F0A70A14DF5B3E47A82BACD91CE5A4D5BDD9C9899CD5C6F2F8C17E2A2C"
+    },
+    {
+      "path": "crates/lumeryn-core/src/model.rs",
+      "sha256": "CCE847672F360A258367D045AC608E156C9DC7838C2E18DD3172FDD31F6538F3"
+    },
+    {
+      "path": "crates/lumeryn-core/src/storage.rs",
+      "sha256": "349F1AB2E01F002B3644DCC4827B159126EC50CAA1FF3D759533DA454844B69B"
+    },
+    {
+      "path": "crates/lumeryn-cli/src/main.rs",
+      "sha256": "18A190132D3EE7C83C1EC38DC65024A6D087C69DF0229111B28C5D591E80A4F1"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "920580CB5F30825054F52EF96C53F0E23C366256CE968C454B7CDF5F399346E2"
+    }
+  ],
+  "screenshots": [
+    {
+      "path": "docs/design/native-polish-v1/export.png",
+      "sha256": "25692BE084A93DD0186BDBB28EA6EDEAAC04443276764325BAA8AC28A1256633"
+    },
+    {
+      "path": "docs/design/native-polish-v1/export-compact.png",
+      "sha256": "E34FD276B59EF58DF58F44FD9D4B8112A0BBCD7A29BD3A251338861479BC467A"
+    },
+    {
+      "path": "docs/design/native-polish-v1/project.png",
+      "sha256": "2FAB8FEE381CA7146619705A40DBFE6D640475FBA5E73477B91156B0F5833163"
+    },
+    {
+      "path": "docs/design/native-polish-v1/active.png",
+      "sha256": "9D4920CF8BD7BC29D760808511834BBDE147E06B6630149A5E15D0F9E8007F9E"
+    },
+    {
+      "path": "docs/design/native-polish-v1/workflow.png",
+      "sha256": "F23B1D23758ACFD2317B07E734E0C60B61886DFE1837E59FAD23B014CAE4452D"
+    }
+  ],
+  "limits": [
+    "Native720p fixture is upscaled to UHD; genuine source detail and marker synchronization are separate core tests.",
+    "OS clipboard, pointer rename/removal, dialog selection, expanded Advanced settings scrolling and highDPI remain manual acceptance.",
+    "Font cold-start/atlas memory and complex-script coverage remain unmeasured.",
+    "119 distinct tests do not complete all eighteen feature families.",
+    "An earlier gate overlapped native captures and hit the executable-lock guard; final gate/build/captures/native ran serially."
+  ],
+  "installed_cli_sha256": "4AAD3F9727B307CD0A454334B74AED09BDC8EA30AB62C3B6615FF4E3C71E6A62"
+}

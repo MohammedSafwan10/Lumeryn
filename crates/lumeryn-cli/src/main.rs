@@ -224,6 +224,40 @@ struct Write {
 
 #[derive(Debug, Subcommand)]
 enum MediaCommand {
+    /// List project media and their timeline usage without reading source bytes.
+    List {
+        #[arg(long)]
+        project: PathBuf,
+    },
+    /// Inspect one imported media reference and its project-only display name.
+    Inspect {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        media_id: Uuid,
+    },
+    /// Set a project-only display alias, or reset it to the source filename.
+    Rename {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        media_id: Uuid,
+        #[arg(long, required_unless_present = "reset", conflicts_with = "reset")]
+        name: Option<String>,
+        #[arg(long, conflicts_with = "name")]
+        reset: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove an unused project reference; the source file remains on disk.
+    Remove {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        media_id: Uuid,
+        #[arg(long)]
+        dry_run: bool,
+    },
     Probe {
         #[arg(long)]
         path: PathBuf,
@@ -499,6 +533,14 @@ async fn edit(write: Write, batch: Batch, dry_run: bool, tools: &MediaTools) -> 
         .await
 }
 
+fn media_view(media: &lumeryn_core::model::Media, usage_count: usize) -> Result<Value> {
+    let mut value = serde_json::to_value(media)?;
+    value["alias"] = json!(media.alias);
+    value["display_name"] = json!(media.display_name());
+    value["usage_count"] = json!(usage_count);
+    Ok(value)
+}
+
 async fn project_call(project: PathBuf, request: Request) -> Result<Value> {
     Client::connect(project).await?.call(request).await
 }
@@ -547,7 +589,8 @@ async fn execute(cli: Cli) -> Result<Value> {
         }
         Command::Capabilities => Ok(json!({
             "api_version":1,"project_schema_version":1,"output":"json",
-            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
+            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","media.list","media.inspect","media.rename","media.remove","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.canvas","timeline.clip.add","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
+            "media_management":{"alias":"project-only; null resets source filename display","alias_maximum_utf8_bytes":256,"remove":"unused project references only; rejects referenced media; source bytes unchanged","undo_redo":true,"dry_run":true},
             "history":{"undo_redo":"new monotonic revisions; logical history restored transactionally","undo_redo_batch":"sole operation only","branch_edit_clears_redo":true},
             "clipboard":{"version":1,"maximum_payload_bytes":16384,"scope":"same project and already-imported BLAKE3 source identity","payload":"result.clipboard object","cross_project_transfer":"staged","paste":"authoritative typed PasteClip with new stable ID and exact source ranges"},
             "requires_external_tools":["media.probe","media.import","render"],
@@ -669,6 +712,71 @@ async fn execute(cli: Cli) -> Result<Value> {
             }
         },
         Command::Media(command) => match command {
+            MediaCommand::List { project } => {
+                let snapshot = Client::connect(project).await?.inspect().await?;
+                let usage = snapshot.clips.iter().fold(
+                    std::collections::HashMap::<_, usize>::new(),
+                    |mut usage, clip| {
+                        *usage.entry(clip.media_id).or_default() += 1;
+                        usage
+                    },
+                );
+                let media = snapshot
+                    .media
+                    .iter()
+                    .map(|media| media_view(media, usage.get(&media.id).copied().unwrap_or(0)))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(json!({"revision":snapshot.revision,"media":media}))
+            }
+            MediaCommand::Inspect { project, media_id } => {
+                let snapshot = Client::connect(project).await?.inspect().await?;
+                let media = snapshot
+                    .media
+                    .iter()
+                    .find(|media| media.id == media_id)
+                    .ok_or_else(|| Error::NotFound(format!("media {media_id}")))?;
+                let usage_count = snapshot
+                    .clips
+                    .iter()
+                    .filter(|clip| clip.media_id == media_id)
+                    .count();
+                Ok(json!({"revision":snapshot.revision,"media":media_view(media, usage_count)?}))
+            }
+            MediaCommand::Rename {
+                write,
+                media_id,
+                name,
+                reset,
+                dry_run,
+            } => {
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::RenameMedia {
+                            media_id,
+                            alias: if reset { None } else { name },
+                        }],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
+            MediaCommand::Remove {
+                write,
+                media_id,
+                dry_run,
+            } => {
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::RemoveMedia { media_id }],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
             MediaCommand::Probe { path } => Ok(serde_json::to_value(tools.probe(&path).await?)?),
             MediaCommand::Import { write, path, id } => {
                 let id = operation_id(id, &write)?;

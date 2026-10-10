@@ -28,7 +28,22 @@ pub struct Media {
     pub id: Uuid,
     /// Relative to the database's parent when the asset is inside it.
     pub path: PathBuf,
+    /// Project-local display text. None retains the legacy filename-derived label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     pub metadata: Metadata,
+}
+
+impl Media {
+    /// A display label only; source resolution and cache identity always use path/metadata.
+    pub fn display_name(&self) -> String {
+        self.alias.clone().unwrap_or_else(|| {
+            self.path.file_stem().map_or_else(
+                || "Media".into(),
+                |name| name.to_string_lossy().replace('_', " "),
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -49,6 +64,17 @@ pub enum Edit {
     Import {
         id: Uuid,
         path: PathBuf,
+    },
+    /// Set project-local display text; explicit null restores the filename-derived label.
+    RenameMedia {
+        media_id: Uuid,
+        #[serde(deserialize_with = "deserialize_required_alias")]
+        #[schemars(required, schema_with = "nullable_alias_schema")]
+        alias: Option<String>,
+    },
+    /// Remove only an unused project reference, without deleting source or cache files.
+    RemoveMedia {
+        media_id: Uuid,
     },
     AddClip {
         id: Uuid,
@@ -96,6 +122,21 @@ pub enum Edit {
     Undo {},
     /// Restore the next logical snapshot through the authoritative Store history.
     Redo {},
+}
+
+// A custom deserializer without a default rejects a missing field while retaining null reset.
+fn deserialize_required_alias<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
+}
+
+// Schemars `required` alone strips Option nullability; keep both presence and nullable value.
+fn nullable_alias_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    <Option<String>>::json_schema(generator)
 }
 
 fn default_ripple() -> bool {
@@ -157,6 +198,14 @@ impl Project {
             return Err(Error::Invalid("object IDs must be unique".into()));
         }
         for media in &self.media {
+            if media.alias.as_ref().is_some_and(|alias| {
+                alias.trim().is_empty() || alias.len() > 256 || alias.chars().any(char::is_control)
+            }) {
+                return Err(Error::Invalid(
+                    "media alias must be nonblank, at most 256 UTF-8 bytes and free of control characters"
+                        .into(),
+                ));
+            }
             if media.metadata.blake3.as_ref().is_some_and(|hash| {
                 hash.len() != 64
                     || !hash
@@ -237,6 +286,32 @@ impl Project {
             Edit::Import { .. } => self
                 .media
                 .push(imported.ok_or_else(|| Error::Invalid("import must be prepared".into()))?),
+            Edit::RenameMedia { media_id, alias } => {
+                let media = self
+                    .media
+                    .iter_mut()
+                    .find(|media| media.id == *media_id)
+                    .ok_or_else(|| Error::NotFound(format!("media {media_id}")))?;
+                media.alias = alias.clone();
+            }
+            Edit::RemoveMedia { media_id } => {
+                let index = self
+                    .media
+                    .iter()
+                    .position(|media| media.id == *media_id)
+                    .ok_or_else(|| Error::NotFound(format!("media {media_id}")))?;
+                let usage_count = self
+                    .clips
+                    .iter()
+                    .filter(|clip| clip.media_id == *media_id)
+                    .count();
+                if usage_count > 0 {
+                    return Err(Error::Invalid(format!(
+                        "media {media_id} is referenced by {usage_count} clip(s); remove its clips first"
+                    )));
+                }
+                self.media.remove(index);
+            }
             Edit::AddClip {
                 id,
                 media_id,

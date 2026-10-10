@@ -24,6 +24,7 @@ fn indexed_fixture() -> lumeryn_core::Result<Project> {
     project.media.push(Media {
         id: Uuid::new_v4(),
         path: "source.bin".into(),
+        alias: None,
         metadata: Metadata {
             size_bytes: 6,
             blake3: None,

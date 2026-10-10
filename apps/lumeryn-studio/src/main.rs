@@ -16,6 +16,7 @@ pub enum CaptureState {
     Active,
     Export,
     Inspector,
+    Project,
     Tools,
     Empty,
     Library,

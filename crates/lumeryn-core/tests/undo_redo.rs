@@ -12,6 +12,7 @@ fn fixture() -> Result<Project> {
     project.media.push(Media {
         id: media_id,
         path: "source.mp4".into(),
+        alias: None,
         metadata: Metadata {
             size_bytes: 1,
             blake3: None,

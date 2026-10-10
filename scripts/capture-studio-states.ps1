@@ -61,6 +61,8 @@ try {
     $captureCases = @(
         @{name='active';state='active';width=1440;height=900},
         @{name='compact';state='inspector';width=980;height=640},
+        @{name='project';state='project';width=1440;height=900},
+        @{name='export-compact';state='export';width=980;height=640},
         @{name='export';state='export';width=1440;height=900},
         @{name='tools';state='tools';width=1280;height=800},
         @{name='empty';state='empty';width=1280;height=800},

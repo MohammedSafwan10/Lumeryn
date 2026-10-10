@@ -79,6 +79,7 @@ async fn fixture(directory: &Path, width: u32, height: u32) -> TestResult<Projec
     project.media.push(Media {
         id: media_id,
         path: source,
+        alias: None,
         metadata,
     });
     project.clips.push(Clip {

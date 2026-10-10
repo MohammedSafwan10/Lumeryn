@@ -199,6 +199,11 @@ struct Picked {
     path: Option<PathBuf>,
 }
 
+struct MediaRename {
+    id: Uuid,
+    text: String,
+}
+
 pub struct Session {
     backend: Backend,
     pub project: Option<Project>,
@@ -230,6 +235,7 @@ pub struct Session {
     pub render_busy: bool,
     active_job: Option<Uuid>,
     output_input: String,
+    export_name: String,
     render_options: RenderOptions,
     pub last_complete: Option<String>,
     pub last_render: Option<Value>,
@@ -244,6 +250,7 @@ pub struct Session {
     picker: Option<std::sync::mpsc::Receiver<Picked>>,
     pending_import: Option<(u64, PathBuf)>,
     selected_media: Option<Uuid>,
+    media_rename: Option<MediaRename>,
     recent_media: bool,
     monitor_muted: bool,
     volume: f32,
@@ -315,6 +322,7 @@ impl Session {
             render_busy: false,
             active_job: None,
             output_input: String::new(),
+            export_name: "export.mp4".into(),
             render_options: if options.smoke_uhd {
                 RenderOptions {
                     resolution: RenderResolution::Uhd2160,
@@ -324,8 +332,15 @@ impl Session {
                     quality: RenderQuality::Balanced,
                     ..Default::default()
                 }
-            } else {
+            } else if options.smoke {
                 RenderOptions::default()
+            } else {
+                RenderOptions {
+                    resolution: RenderResolution::Fhd1080,
+                    codec: VideoCodec::H264,
+                    acceleration: Acceleration::Auto,
+                    ..Default::default()
+                }
             },
             last_complete: None,
             last_render: None,
@@ -344,6 +359,7 @@ impl Session {
             picker: None,
             pending_import: None,
             selected_media: None,
+            media_rename: None,
             recent_media: false,
             monitor_muted: false,
             volume: 0.8,
@@ -390,6 +406,8 @@ impl Session {
         }
         self.selected = None;
         self.selected_media = None;
+        self.media_rename = None;
+        self.export_name = "export.mp4".into();
         self.connected = false;
         self.playhead = 0;
         self.history.clear();
@@ -460,7 +478,13 @@ impl Session {
                 match picked.kind {
                     Picker::Open => self.open(path),
                     Picker::Import => self.pending_import = Some((self.epoch, path)),
-                    Picker::Export => self.output_input = path.display().to_string(),
+                    Picker::Export => {
+                        self.export_name = path.file_name().map_or_else(
+                            || "export.mp4".into(),
+                            |name| name.to_string_lossy().into_owned(),
+                        );
+                        self.output_input = path.display().to_string();
+                    }
                     Picker::Create => {
                         self.edit_busy = self.send(Command::Create {
                             path,
@@ -506,6 +530,18 @@ impl Session {
                     self.connected = true;
                     self.connection = "Connected · shared project service".into();
                     if changed {
+                        if self.media_rename.take().is_some() {
+                            self.fail(
+                                "The project changed. Reopen Rename to use its latest revision."
+                                    .into(),
+                            );
+                        }
+                        if self
+                            .selected_media
+                            .is_some_and(|id| !project.media.iter().any(|media| media.id == id))
+                        {
+                            self.selected_media = None;
+                        }
                         self.playhead = self
                             .playhead
                             .min(timeline::total_frames(&project).saturating_sub(1));
@@ -652,6 +688,71 @@ impl Session {
         {
             self.trim_source = clip.source_in_frame;
             self.trim_duration = clip.duration_frames;
+        }
+    }
+
+    pub(crate) fn rename_media(&mut self, media_id: Uuid, alias: Option<String>) -> bool {
+        self.edit(Edit::RenameMedia { media_id, alias }, "Rename media")
+    }
+
+    pub(crate) fn remove_media(&mut self, media_id: Uuid) -> bool {
+        self.edit(Edit::RemoveMedia { media_id }, "Remove media from project")
+    }
+
+    fn rename_panel(&mut self, ctx: &egui::Context) {
+        let Some(mut form) = self.media_rename.take() else {
+            return;
+        };
+        let Some(media) = self
+            .project
+            .as_ref()
+            .and_then(|project| project.media.iter().find(|media| media.id == form.id))
+        else {
+            return;
+        };
+        let path = media.path.display().to_string();
+        let changed = media.alias.as_deref() != Some(form.text.as_str());
+        let reset_available = media.alias.is_some();
+        let mut open = true;
+        let mut save = false;
+        let mut reset = false;
+        egui::Window::new("Rename media")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(360.0)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Name in this project");
+                ui.add(
+                    egui::TextEdit::singleline(&mut form.text).desired_width(ui.available_width()),
+                );
+                ui.label(
+                    egui::RichText::new("The original filename stays unchanged.")
+                        .small()
+                        .color(design::MUTED),
+                )
+                .on_hover_text(&path);
+                save = design::primary(
+                    ui,
+                    "Save name",
+                    self.connected && !self.edit_busy && changed,
+                    ui.available_width(),
+                )
+                .clicked();
+                reset = ui
+                    .add_enabled(
+                        self.connected && !self.edit_busy && reset_available,
+                        egui::Button::new("Use original name"),
+                    )
+                    .clicked();
+            });
+        if save {
+            self.rename_media(form.id, Some(form.text));
+        } else if reset {
+            self.rename_media(form.id, None);
+        } else if open {
+            self.media_rename = Some(form);
         }
     }
 
@@ -911,6 +1012,8 @@ impl Session {
             return;
         };
         let mut add = None;
+        let mut rename = None;
+        let mut remove = None;
         let width = (ui.available_width() - 12.0) / 2.0;
         let media: Vec<_> = if self.recent_media {
             project.media.iter().rev().collect()
@@ -993,6 +1096,48 @@ impl Session {
                                 if response.clicked() {
                                     self.selected_media = Some(media.id);
                                 }
+                                response.context_menu(|ui| {
+                                    let enabled = self.connected && !self.edit_busy;
+                                    if ui
+                                        .add_enabled(enabled, egui::Button::new("Rename"))
+                                        .clicked()
+                                    {
+                                        rename = Some(MediaRename {
+                                            id: media.id,
+                                            text: media.display_name(),
+                                        });
+                                        ui.close();
+                                    }
+                                    let usage = project
+                                        .clips
+                                        .iter()
+                                        .filter(|clip| clip.media_id == media.id)
+                                        .count();
+                                    if ui
+                                        .add_enabled(
+                                            enabled && usage == 0,
+                                            egui::Button::new("Remove from project"),
+                                        )
+                                        .clicked()
+                                    {
+                                        remove = Some(media.id);
+                                        ui.close();
+                                    }
+                                    if usage > 0 {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "Used by {usage} clips. Remove those clips first."
+                                            ))
+                                            .small()
+                                            .color(design::MUTED),
+                                        );
+                                    }
+                                    ui.label(
+                                        egui::RichText::new("Original files stay on disk.")
+                                            .small()
+                                            .color(design::MUTED),
+                                    );
+                                });
                                 response.on_hover_text(
                                     "Select media. Double-click a video to add it to the timeline.",
                                 );
@@ -1036,7 +1181,12 @@ impl Session {
         {
             add = Some((media.id, video.frames));
         }
-        if let Some((media_id, duration_frames)) = add {
+        if let Some(rename) = rename {
+            self.media_rename = Some(rename);
+        }
+        if let Some(id) = remove {
+            self.remove_media(id);
+        } else if let Some((media_id, duration_frames)) = add {
             let at_frame = self.project.as_ref().map_or(0, timeline::total_frames);
             self.edit(
                 Edit::AddClip {
@@ -1592,138 +1742,295 @@ impl Session {
             );
         }
     }
-    fn render_panel(&mut self, ui: &mut egui::Ui) {
-        design::section(
-            ui,
-            "Export your video",
-            "Local MP4 · no watermark · verified before completion",
-        );
-        if let Some(project) = &self.project {
-            ui.label(format!(
-                "{} x {} - {} fps",
-                project.width, project.height, project.frame_rate
-            ));
-        }
-        ui.add_enabled_ui(!self.render_busy, |ui| {
-            egui::ComboBox::from_id_salt("export-resolution")
-                .selected_text(match self.render_options.resolution {
-                    RenderResolution::Project => "Project resolution",
-                    RenderResolution::Hd720 => "720p",
-                    RenderResolution::Fhd1080 => "1080p",
-                    RenderResolution::Uhd2160 => "4K UHD",
-                })
+    fn project_panel(&mut self, ui: &mut egui::Ui) {
+        let Some(project) = &self.project else {
+            ui.label("Open a project to begin.");
+            if ui.button("Choose a project…").clicked() {
+                self.pick(ui.ctx(), Picker::Open);
+            }
+            return;
+        };
+        ui.add(egui::Label::new(RichText::new(&project.name).strong().size(18.0)).wrap());
+        ui.add_space(12.0);
+        ui.label(RichText::new("Canvas").small().color(design::MUTED));
+        let current = (project.width, project.height);
+        let mut choice = current;
+        let canvas_label = canvas_choices()
+            .iter()
+            .find(|(size, _)| {
+                u64::from(size.0) * u64::from(current.1) == u64::from(current.0) * u64::from(size.1)
+            })
+            .map_or("Custom", |(_, label)| *label);
+        ui.add_enabled_ui(self.connected && !self.edit_busy, |ui| {
+            egui::ComboBox::from_id_salt("project-canvas")
+                .width(ui.available_width())
+                .selected_text(canvas_label)
                 .show_ui(ui, |ui| {
-                    for (value, label) in [
-                        (RenderResolution::Project, "Project resolution"),
-                        (RenderResolution::Hd720, "720p"),
-                        (RenderResolution::Fhd1080, "1080p"),
-                        (RenderResolution::Uhd2160, "4K UHD"),
-                    ] {
-                        ui.selectable_value(&mut self.render_options.resolution, value, label);
+                    for (size, label) in canvas_choices() {
+                        ui.selectable_value(&mut choice, size, label);
                     }
                 });
-            egui::ComboBox::from_id_salt("export-fps")
-                .selected_text(
-                    self.render_options
-                        .fps
-                        .map_or_else(|| "Project frame rate".into(), |fps| format!("{fps} FPS")),
-                )
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.render_options.fps, None, "Project frame rate");
-                    for fps in [24, 25, 30, 60] {
-                        ui.selectable_value(
-                            &mut self.render_options.fps,
-                            Some(fps),
-                            format!("{fps} FPS"),
-                        );
-                    }
-                });
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("export-codec")
-                    .selected_text(format!("{:?}", self.render_options.codec))
-                    .show_ui(ui, |ui| {
-                        for (codec, label) in [
-                            (VideoCodec::Mpeg4, "MPEG-4"),
-                            (VideoCodec::H264, "H.264"),
-                            (VideoCodec::H265, "H.265"),
-                        ] {
-                            ui.selectable_value(&mut self.render_options.codec, codec, label);
-                        }
-                    });
-                egui::ComboBox::from_id_salt("export-quality")
-                    .selected_text(format!("{:?}", self.render_options.quality))
-                    .show_ui(ui, |ui| {
-                        for (quality, label) in [
-                            (RenderQuality::Draft, "Draft"),
-                            (RenderQuality::Balanced, "Balanced"),
-                            (RenderQuality::High, "High"),
-                        ] {
-                            ui.selectable_value(&mut self.render_options.quality, quality, label);
-                        }
-                    });
-            });
-            egui::ComboBox::from_id_salt("export-acceleration")
-                .selected_text(match self.render_options.acceleration {
-                    Acceleration::Cpu => "Software encoder",
-                    Acceleration::Auto => "Automatic hardware + fallback",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.render_options.acceleration,
-                        Acceleration::Cpu,
-                        "Software encoder",
-                    );
-                    ui.selectable_value(
-                        &mut self.render_options.acceleration,
-                        Acceleration::Auto,
-                        "Automatic hardware + fallback",
-                    );
-                });
-            let mut custom_bitrate = self.render_options.bitrate_kbps.is_some();
-            if ui
-                .checkbox(&mut custom_bitrate, "Set video bitrate")
-                .changed()
-            {
-                self.render_options.bitrate_kbps = custom_bitrate.then_some(20_000);
-            }
-            if let Some(bitrate) = &mut self.render_options.bitrate_kbps {
-                ui.add(
-                    egui::DragValue::new(bitrate)
-                        .range(100..=200_000)
-                        .suffix(" kbps"),
-                );
-            }
         });
-        if let Some(project) = &self.project {
-            let (width, height) = self.render_options.dimensions(project);
+        ui.add_space(12.0);
+        egui::Grid::new("project-overview")
+            .spacing(Vec2::new(14.0, 12.0))
+            .show(ui, |ui| {
+                ui.label(RichText::new("Size").color(design::MUTED));
+                ui.label(format!("{} × {}", project.width, project.height));
+                ui.end_row();
+                ui.label(RichText::new("Frame rate").color(design::MUTED));
+                ui.label(rate_label(project.frame_rate));
+                ui.end_row();
+                ui.label(RichText::new("Duration").color(design::MUTED));
+                ui.label(timecode(
+                    timeline::total_frames(project) as f64
+                        * f64::from(project.frame_rate.denominator())
+                        / f64::from(project.frame_rate.numerator()),
+                    false,
+                ));
+                ui.end_row();
+            });
+        ui.add_space(12.0);
+        ui.collapsing("File details", |ui| {
+            if let Some(path) = &self.database {
+                ui.add(egui::Label::new(path.display().to_string()).truncate())
+                    .on_hover_text(path.display().to_string());
+            }
             ui.label(
-                RichText::new(format!(
-                    "Output {width} × {height} · portrait follows the project canvas"
-                ))
-                .color(design::MUTED),
+                RichText::new(format!("Revision {}", project.revision))
+                    .small()
+                    .color(design::MUTED),
+            );
+        });
+        if choice != current {
+            self.edit(
+                Edit::SetCanvas {
+                    width: choice.0,
+                    height: choice.1,
+                },
+                "Change canvas",
             );
         }
+    }
+
+    fn render_panel(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical()
+            .id_salt("export-settings-scroll")
+            .max_height((ui.ctx().content_rect().height() - 320.0).clamp(240.0, 440.0))
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!self.render_busy, |ui| {
+                    ui.columns(2, |columns| {
+                        egui::Frame::new()
+                            .fill(design::RAISED)
+                            .corner_radius(8)
+                            .inner_margin(14)
+                            .show(&mut columns[0], |ui| {
+                                ui.spacing_mut().interact_size.y = 24.0;
+                                ui.spacing_mut().item_spacing.y = 4.0;
+                                ui.set_min_width(258.0);
+                                ui.label(RichText::new("Resolution").strong());
+                                ui.add_space(8.0);
+                                for (resolution, name, hint) in [
+                                    (RenderResolution::Uhd2160, "4K UHD", "Maximum detail"),
+                                    (RenderResolution::Fhd1080, "1080p", "Everyday high quality"),
+                                    (RenderResolution::Hd720, "720p", "Smaller file"),
+                                    (
+                                        RenderResolution::Project,
+                                        "Project size",
+                                        "Keep the canvas resolution",
+                                    ),
+                                ] {
+                                    if ui
+                                        .radio(self.render_options.resolution == resolution, name)
+                                        .clicked()
+                                    {
+                                        self.render_options.resolution = resolution;
+                                    }
+                                    ui.label(RichText::new(hint).small().color(design::MUTED));
+                                    ui.add_space(4.0);
+                                }
+                            });
+                        let ui = &mut columns[1];
+                        ui.label(RichText::new("Video settings").strong());
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Frame rate").small().color(design::MUTED));
+                        egui::ComboBox::from_id_salt("export-fps")
+                            .width(ui.available_width())
+                            .selected_text(self.render_options.fps.map_or_else(
+                                || {
+                                    self.project.as_ref().map_or_else(
+                                        || "Project frame rate".into(),
+                                        |p| format!("{} · project", rate_label(p.frame_rate)),
+                                    )
+                                },
+                                |fps| format!("{fps} fps"),
+                            ))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.render_options.fps,
+                                    None,
+                                    "Project frame rate",
+                                );
+                                for fps in [24, 25, 30, 60] {
+                                    ui.selectable_value(
+                                        &mut self.render_options.fps,
+                                        Some(fps),
+                                        format!("{fps} fps"),
+                                    );
+                                }
+                            });
+                        ui.label(RichText::new("Codec").small().color(design::MUTED));
+                        egui::ComboBox::from_id_salt("export-codec")
+                            .width(ui.available_width())
+                            .selected_text(codec_label(self.render_options.codec))
+                            .show_ui(ui, |ui| {
+                                for codec in [VideoCodec::H264, VideoCodec::H265, VideoCodec::Mpeg4]
+                                {
+                                    ui.selectable_value(
+                                        &mut self.render_options.codec,
+                                        codec,
+                                        codec_label(codec),
+                                    );
+                                }
+                            });
+                        ui.label(RichText::new("Quality").small().color(design::MUTED));
+                        egui::ComboBox::from_id_salt("export-quality")
+                            .width(ui.available_width())
+                            .selected_text(quality_label(self.render_options.quality))
+                            .show_ui(ui, |ui| {
+                                for quality in [
+                                    RenderQuality::High,
+                                    RenderQuality::Balanced,
+                                    RenderQuality::Draft,
+                                ] {
+                                    ui.selectable_value(
+                                        &mut self.render_options.quality,
+                                        quality,
+                                        quality_label(quality),
+                                    );
+                                }
+                            });
+                    });
+                    ui.add_space(10.0);
+                    ui.collapsing("Advanced settings", |ui| {
+                        ui.label("Encoder");
+                        egui::ComboBox::from_id_salt("export-acceleration")
+                            .width(ui.available_width())
+                            .selected_text(match self.render_options.acceleration {
+                                Acceleration::Cpu => "Software",
+                                Acceleration::Auto => "Automatic",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.render_options.acceleration,
+                                    Acceleration::Auto,
+                                    "Automatic · hardware with software fallback",
+                                );
+                                ui.selectable_value(
+                                    &mut self.render_options.acceleration,
+                                    Acceleration::Cpu,
+                                    "Software",
+                                );
+                            });
+                        let mut custom = self.render_options.bitrate_kbps.is_some();
+                        if ui.checkbox(&mut custom, "Custom video bitrate").changed() {
+                            self.render_options.bitrate_kbps = custom.then_some(20_000);
+                        }
+                        if let Some(bitrate) = &mut self.render_options.bitrate_kbps {
+                            ui.add(
+                                egui::DragValue::new(bitrate)
+                                    .range(100..=200_000)
+                                    .suffix(" kbps"),
+                            );
+                        }
+                        ui.label(
+                            RichText::new(
+                                "MP4 output. Installed encoders determine codec availability.",
+                            )
+                            .small()
+                            .color(design::MUTED),
+                        );
+                    });
+                });
+            });
         ui.add_space(8.0);
-        ui.label("Save to a new file");
-        ui.add(egui::TextEdit::singleline(&mut self.output_input).desired_width(f32::INFINITY));
-        if ui
+        ui.separator();
+        ui.add_space(8.0);
+        ui.label(RichText::new("File name").small().color(design::MUTED));
+        let name_changed = ui
             .add_enabled(
-                self.picker.is_none(),
-                egui::Button::new("Choose location..."),
+                !self.render_busy,
+                egui::TextEdit::singleline(&mut self.export_name)
+                    .desired_width(ui.available_width()),
             )
-            .clicked()
-        {
-            self.pick(ui.ctx(), Picker::Export);
+            .changed();
+        let valid_name = export_name_valid(&self.export_name);
+        if valid_name && name_changed {
+            let parent = std::path::Path::new(&self.output_input)
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            self.output_input = parent.join(&self.export_name).display().to_string();
+        } else if !valid_name {
+            ui.label(
+                RichText::new("Use a filename ending in .mp4, without folders.")
+                    .small()
+                    .color(design::WARNING),
+            );
         }
-        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let parent = std::path::Path::new(&self.output_input).parent();
+            let folder = parent.map_or_else(
+                || "Choose a folder".into(),
+                |path| path.display().to_string(),
+            );
+            let location = if parent == self.database.as_deref().and_then(std::path::Path::parent) {
+                "Project folder".into()
+            } else {
+                parent.and_then(std::path::Path::file_name).map_or_else(
+                    || "Choose a folder".into(),
+                    |name| name.to_string_lossy().into_owned(),
+                )
+            };
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("Save to {location}"))
+                        .small()
+                        .color(design::MUTED),
+                )
+                .truncate(),
+            )
+            .on_hover_text(&folder);
+            if ui
+                .add_enabled(
+                    self.picker.is_none() && !self.render_busy,
+                    egui::Button::new("Browse…"),
+                )
+                .clicked()
+            {
+                self.pick(ui.ctx(), Picker::Export);
+            }
+        });
+        ui.add_space(12.0);
+        if let Some(project) = &self.project {
+            let (width, height) = self.render_options.dimensions(project);
+            let fps = self.render_options.fps.map_or_else(
+                || rate_label(project.frame_rate),
+                |fps| format!("{fps} fps"),
+            );
+            ui.label(
+                RichText::new(format!("{width} × {height}  ·  {fps}  ·  MP4")).color(design::MUTED),
+            );
+        }
         if design::primary(
             ui,
             if self.render_busy {
-                "Exporting..."
+                "Exporting…"
             } else {
                 "Export video"
             },
-            self.connected && !self.render_busy && !self.output_input.trim().is_empty(),
+            self.connected && !self.render_busy && valid_name && !self.output_input.is_empty(),
             ui.available_width(),
         )
         .clicked()
@@ -1733,36 +2040,36 @@ impl Session {
         if self.render_busy {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Rendering in the background");
+                ui.label("Exporting in the background");
             });
-            ui.label(
-                RichText::new(
-                    "You can keep editing. This export uses the revision you started with.",
-                )
-                .color(design::MUTED),
-            );
             if ui.button("Cancel export").clicked()
                 && let Some(job_id) = self.active_job
             {
                 self.send(Command::Cancel { job_id });
             }
+            if let Some(event) = self.events.iter().rev().find(|event| {
+                event.kind.starts_with("job_")
+                    && event
+                        .data
+                        .get("job_id")
+                        .and_then(Value::as_str)
+                        .and_then(|id| Uuid::parse_str(id).ok())
+                        == self.active_job
+            }) {
+                ui.label(
+                    RichText::new(
+                        event
+                            .data
+                            .get("stage")
+                            .and_then(Value::as_str)
+                            .unwrap_or_else(|| job_label(&event.kind)),
+                    )
+                    .small()
+                    .color(design::MUTED),
+                );
+            }
         } else if self.last_complete.as_deref() == Some("Export") {
-            ui.label(
-                RichText::new("Export complete - output decoded and verified")
-                    .color(design::ACCENT),
-            );
-        }
-        for event in self
-            .events
-            .iter()
-            .rev()
-            .filter(|e| e.kind.starts_with("job_"))
-            .take(6)
-        {
-            ui.label(event.data.get("stage").and_then(Value::as_str).map_or_else(
-                || job_label(&event.kind).to_owned(),
-                |stage| format!("Export: {}", stage.replace('_', " ")),
-            ));
+            ui.label(RichText::new("Video saved").color(design::ACCENT));
         }
     }
     fn activity(&mut self, ui: &mut egui::Ui) {
@@ -1836,6 +2143,12 @@ impl Session {
         });
     }
     fn diagnostics(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Interface font licence", |ui| {
+            ui.label("Inter Regular · SIL Open Font License 1.1");
+            ui.label(include_str!(
+                "../../../assets/library/notices/inter.v4.1/License.txt"
+            ));
+        });
         design::section(
             ui,
             "Diagnostics",
@@ -1881,11 +2194,51 @@ impl Session {
 fn unit_rect() -> egui::Rect {
     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0))
 }
+fn canvas_choices() -> [((u32, u32), &'static str); 7] {
+    [
+        ((1920, 1080), "Wide 16:9"),
+        ((1080, 1920), "Vertical 9:16"),
+        ((1080, 1080), "Square 1:1"),
+        ((1440, 1080), "Classic 4:3"),
+        ((1080, 1350), "Social 4:5"),
+        ((2520, 1080), "Cinema 21:9"),
+        ((1080, 1620), "Portrait 2:3"),
+    ]
+}
+fn rate_label(rate: lumeryn_core::time::FrameRate) -> String {
+    if rate.denominator() == 1 {
+        format!("{} fps", rate.numerator())
+    } else {
+        format!(
+            "{:.2} fps",
+            f64::from(rate.numerator()) / f64::from(rate.denominator())
+        )
+    }
+}
+fn codec_label(codec: VideoCodec) -> &'static str {
+    match codec {
+        VideoCodec::H264 => "H.264",
+        VideoCodec::H265 => "H.265",
+        VideoCodec::Mpeg4 => "MPEG-4",
+    }
+}
+fn quality_label(quality: RenderQuality) -> &'static str {
+    match quality {
+        RenderQuality::High => "High",
+        RenderQuality::Balanced => "Balanced",
+        RenderQuality::Draft => "Draft",
+    }
+}
+fn export_name_valid(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.len() <= 240
+        && name.to_ascii_lowercase().ends_with(".mp4")
+        && !name
+            .chars()
+            .any(|character| character.is_control() || "/\\:*?\"<>|".contains(character))
+}
 fn media_name(media: &lumeryn_core::model::Media) -> String {
-    media
-        .path
-        .file_stem()
-        .map_or_else(|| "Media".into(), |n| n.to_string_lossy().replace('_', " "))
+    media.display_name()
 }
 fn timecode(seconds: f64, precise: bool) -> String {
     let cs = (seconds.max(0.0) * 100.0).round() as u64;
@@ -2012,7 +2365,9 @@ impl Studio {
                 } else {
                     Some(LeftDrawer::Media)
                 },
-                right: if options.capture_only && options.capture_state == CaptureState::Collapsed {
+                right: if options.capture_only && options.capture_state == CaptureState::Project {
+                    Some(RightDrawer::Project)
+                } else if options.capture_only && options.capture_state == CaptureState::Collapsed {
                     None
                 } else {
                     Some(RightDrawer::Clip)
@@ -2235,7 +2590,7 @@ impl Studio {
                     .show(ui, |ui| match right_drawer {
                         Some(RightDrawer::Clip) => self.session.inspector(ui),
                         Some(RightDrawer::Project) => {
-                            self.session.settings(ui);
+                            self.session.project_panel(ui);
                             ui.add_space(12.0);
                             if ui.button("History & project tools").clicked() {
                                 self.tools_open = true;
@@ -2333,9 +2688,15 @@ impl eframe::App for Studio {
                 }
             }
         }
-        if !ctx.egui_wants_keyboard_input() {
+        if self.session.media_rename.is_some()
+            && ctx.input(|input| input.key_pressed(egui::Key::Escape))
+        {
+            self.session.media_rename = None;
+        }
+        if !ctx.egui_wants_keyboard_input() && self.session.media_rename.is_none() {
             if !self.export_open
                 && !self.tools_open
+                && self.session.media_rename.is_none()
                 && !self.fullscreen
                 && !self.session.edit_busy
                 && self.session.connected
@@ -2369,6 +2730,7 @@ impl eframe::App for Studio {
             }
             if !self.export_open
                 && !self.tools_open
+                && self.session.media_rename.is_none()
                 && !self.fullscreen
                 && !self.session.edit_busy
                 && let Some(clip_id) = self.session.selected
@@ -2482,9 +2844,13 @@ impl eframe::App for Studio {
                 .open(&mut self.export_open)
                 .collapsible(false)
                 .resizable(false)
-                .default_width(460.0)
+                .default_width(640.0)
+                .max_height((ctx.content_rect().height() - 80.0).max(360.0))
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                 .show(&ctx, |ui| self.session.render_panel(ui));
+        }
+        if !self.fullscreen {
+            self.session.rename_panel(&ctx);
         }
         if self.tools_open && !self.fullscreen {
             egui::Window::new("Project tools")

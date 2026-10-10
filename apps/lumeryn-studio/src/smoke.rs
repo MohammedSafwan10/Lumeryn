@@ -35,6 +35,7 @@ enum Stage {
         revision: u64,
         frames: u64,
         clips: usize,
+        expected_alias: Option<(Uuid, Option<&'static str>)>,
         label: &'static str,
     },
     Export {
@@ -65,6 +66,7 @@ struct HistoryStep {
     label: &'static str,
     frames: u64,
     clips: usize,
+    expected_alias: Option<(Uuid, Option<&'static str>)>,
 }
 
 impl Smoke {
@@ -344,12 +346,14 @@ impl Smoke {
                             label: "Undo",
                             frames: original - 1,
                             clips: 1,
+                            expected_alias: None,
                         },
                         HistoryStep {
                             edit: Edit::Redo {},
                             label: "Redo",
                             frames: original,
                             clips: 1,
+                            expected_alias: None,
                         },
                         HistoryStep {
                             edit: Edit::PasteClip {
@@ -360,18 +364,21 @@ impl Smoke {
                             label: "Paste clip",
                             frames: original * 2,
                             clips: 2,
+                            expected_alias: None,
                         },
                         HistoryStep {
                             edit: Edit::Undo {},
                             label: "Undo",
                             frames: original,
                             clips: 1,
+                            expected_alias: None,
                         },
                         HistoryStep {
                             edit: Edit::Redo {},
                             label: "Redo",
                             frames: original * 2,
                             clips: 2,
+                            expected_alias: None,
                         },
                         HistoryStep {
                             edit: Edit::DeleteClip {
@@ -381,21 +388,60 @@ impl Smoke {
                             label: "Delete clip",
                             frames: original,
                             clips: 1,
+                            expected_alias: None,
                         },
                         HistoryStep {
                             edit: Edit::Undo {},
                             label: "Undo",
                             frames: original * 2,
                             clips: 2,
+                            expected_alias: None,
                         },
                         HistoryStep {
                             edit: Edit::Redo {},
                             label: "Redo",
                             frames: original,
                             clips: 1,
+                            expected_alias: None,
                         },
                     ]
                     .into();
+                    self.history_steps.extend([
+                        HistoryStep {
+                            edit: Edit::RenameMedia {
+                                media_id: clip.media_id,
+                                alias: Some("Opening shot".into()),
+                            },
+                            label: "Rename media",
+                            frames: original,
+                            clips: 1,
+                            expected_alias: Some((clip.media_id, Some("Opening shot"))),
+                        },
+                        HistoryStep {
+                            edit: Edit::Undo {},
+                            label: "Undo",
+                            frames: original,
+                            clips: 1,
+                            expected_alias: Some((clip.media_id, None)),
+                        },
+                        HistoryStep {
+                            edit: Edit::Redo {},
+                            label: "Redo",
+                            frames: original,
+                            clips: 1,
+                            expected_alias: Some((clip.media_id, Some("Opening shot"))),
+                        },
+                        HistoryStep {
+                            edit: Edit::RenameMedia {
+                                media_id: clip.media_id,
+                                alias: None,
+                            },
+                            label: "Rename media",
+                            frames: original,
+                            clips: 1,
+                            expected_alias: Some((clip.media_id, None)),
+                        },
+                    ]);
                     self.stage = Stage::StartHistory;
                     return;
                 }
@@ -430,6 +476,9 @@ impl Smoke {
                             }
                         }
                     }
+                    lumeryn_core::Edit::RenameMedia { media_id, alias } => {
+                        session.rename_media(*media_id, alias.clone())
+                    }
                     edit => session.edit(edit.clone(), step.label),
                 };
                 if submitted && let Some(step) = self.history_steps.pop_front() {
@@ -437,6 +486,7 @@ impl Smoke {
                         revision: revision + 1,
                         frames: step.frames,
                         clips: step.clips,
+                        expected_alias: step.expected_alias,
                         label: step.label,
                     };
                 }
@@ -445,6 +495,7 @@ impl Smoke {
                 revision,
                 frames,
                 clips,
+                expected_alias,
                 label,
             } => {
                 let Some(project) = &session.project else {
@@ -456,6 +507,13 @@ impl Smoke {
                 if project.revision != revision
                     || timeline::total_frames(project) != frames
                     || project.clips.len() != clips
+                    || expected_alias.is_some_and(|(id, alias)| {
+                        project
+                            .media
+                            .iter()
+                            .find(|media| media.id == id)
+                            .is_none_or(|media| media.alias.as_deref() != alias)
+                    })
                 {
                     self.finish(
                         session,
@@ -470,7 +528,7 @@ impl Smoke {
                 {
                     return;
                 }
-                self.check("native_shared_history_step",json!({"operation":label,"revision":revision,"frames":frames,"clips":clips,"native_presented":session.last_frame}));
+                self.check("native_shared_history_step",json!({"operation":label,"revision":revision,"frames":frames,"clips":clips,"media":expected_alias.map(|(id,alias)|json!({"id":id,"alias":alias})),"native_presented":session.last_frame}));
                 self.stage = Stage::StartHistory;
             }
             Stage::Export { ui_frames } => {

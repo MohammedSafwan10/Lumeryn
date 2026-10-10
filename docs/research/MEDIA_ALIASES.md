@@ -1,0 +1,61 @@
+# Project media aliases and project-only removal
+
+Reviewed 2026-10-09 against the saved core/service/CLI/native Studio implementation. This is a proposed CC-03 implementation slice, not implemented functionality. Scope is project metadata and references; original files, filenames, paths, imported identity and the reviewed library catalogue remain unchanged. No Rust edits, builds, dependency changes or media mutations were performed for this report.
+
+## Observed implementation
+
+`model::Media` contains `id`, `path` and imported `metadata`, with strict unknown-field rejection. `Clip` points to `media_id` and owns its independent clip UUID/source range. `prepare_imports` canonicalizes/probes a source, retains a relative project reference when possible, and records content metadata; it does not copy/rename the source. No alias is stored. Studio card `app::media_name` and timeline `media_label` separately derive a file stem and replace underscores with spaces. Card hover exposes the actual path. The curated library's `AssetEntry.name` belongs to its audited catalogue and must not be overwritten by a project alias.
+
+The project is serialized into a SQLite row; each ordinary atomic batch writes a new snapshot, command history, receipts and rebuilt FTS records in one transaction. `search_records` currently indexes the original media path and video/audio codec strings. Undo/redo restores previous complete project snapshots at new monotonic physical revisions. Clipboard version1 binds project/media UUID, imported BLAKE3, rational rate and source range; it intentionally contains no display label. Render/preview/cache identity uses source references and metadata rather than media display names.
+
+## Smallest typed semantics
+
+Add `Media.alias: Option<String>` with `#[serde(default, skip_serializing_if = "Option::is_none")]`. `None` means the current legacy filename-derived display label; `Some` is project-local text. Add one shared core display helper used by media cards, timeline labels, inspectors and agent output, retaining the existing stem/underscore fallback. Do not implement separate GUI aliases or rename filesystem paths.
+
+Proposed shared commands:
+
+| Operation | Fields | Result |
+|---|---|---|
+| `RenameMedia` | `media_id: Uuid`, `alias: Option<String>` | Set the alias; explicit null clears it to the legacy display label |
+| `RemoveMedia` | `media_id: Uuid` | Remove that imported reference only if no current clip uses it |
+
+Validate every alias during full `Project::validate`, not only the command: nonblank after whitespace inspection, at most256 UTF-8 bytes, no control characters. Store exact accepted text; allow multilingual names and ordinary punctuation because this is a display label, not a path. Duplicate aliases are allowed; UUIDs remain authoritative. No filesystem operation or FFmpeg argument may use alias text. Keep original path available separately for provenance and troubleshooting. CLI parsing must require exactly one `--name <text>` or `--reset` so omission cannot accidentally clear a label; the typed JSON nullable field's reset semantics must be documented in the generated schema/workflows.
+
+An absent media UUID is an explicit not-found error. An alias identical to the current value may follow the existing explicit-command revision policy; Studio should avoid submitting an unchanged form. Existing revision checks, dry-run, idempotency receipts and atomic rollback apply without a new service request family. Receipts return the affected media UUID.
+
+Removal must first check all current `Clip.media_id` references and reject a used source with a bounded error giving the usage count and instruction to remove its clips first. No implicit cascade, ripple, timeline compaction or `--force` is needed for this first slice. Users/agents can deliberately submit existing `DeleteClip` commands followed by `RemoveMedia` in one dry-run-reviewed atomic batch; each clip deletion retains its explicit ripple policy. This gives one undo step for the complete edit and avoids inventing ambiguous multi-track deletion rules before CC-04.
+
+Only the selected imported UUID is removed: another import of the same path/hash remains independent. Source bytes, reviewed library entries/notices, cached files and historical snapshots are not deleted. Undo restores the same imported UUID/alias/reference, and redo removes it again. Current metadata search stops returning the removed reference, while historic undo targets remain intact. Clipboard paste against currently removed media fails; exact previously admitted keyed paste retries still return their original receipt because the authoritative receipt lookup precedes current-graph validation. Undo can restore clipboard usability. No source reclamation/garbage collection is implied.
+
+SQLite's documented `RESTRICT` behavior is a useful semantic comparison, but there are no normalized media/clip foreign-key rows in this JSON graph. The restriction must be enforced by the authoritative Rust graph validator; a database foreign-key pragma alone cannot inspect UUIDs inside project JSON. [Official foreign-key actions](https://www.sqlite.org/foreignkeys.html#fk_actions).
+
+## Compatibility and schema decision
+
+The smallest recommendation retains graph schema1 with an additive optional alias and strict read validation. Updated binaries read unchanged old snapshots as `alias=None`. **Both defaulting and omission on serialization are required.** Current `Store::integrity_check` compares persisted current-history JSON directly to the reserialized `Project`; writing `alias:null` for every old media object would make an untouched old history snapshot fail equality. Default alone is therefore insufficient. Old history snapshots must remain byte/content-preserved; do not silently rewrite them on open.
+
+This is backward compatibility for a new reader reading old projects, not forward compatibility for an old binary reading alias-bearing projects. Old binaries reject unknown alias fields, and new rename/remove commands are also unknown to their history parser. Do not claim bidirectional compatibility. Capability/schema discovery and unsupported-reader errors must be explicit; a live old client may reject a snapshot containing aliases. Serde documents defaulting absent fields and conditional serialization as separate field attributes. [Official field attributes](https://serde.rs/field-attrs.html).
+
+An explicit graph schema bump and owner-reviewed migration become required if policy demands a formal old-reader barrier before any alias-bearing snapshot, aliases become mandatory, graph/reference meanings change, or the storage/history layout is restructured. The existing current-row `schema_version` preflight can reject a future version before JSON decoding, but simply changing `SCHEMA_VERSION` to2 would reject every old snapshot/undo target. A real upgrade must preserve all historical restore targets, physical/logical revisions, source references and receipts using version-aware historical decoding, and must be explicit/transactional after backup. That is larger than a project-label slice and should be coordinated with the forthcoming versioned composition graph rather than introduced incidentally. Root must confirm/document the compatibility policy before assigning code ownership.
+
+No SQLite table/`user_version` migration is required for the recommended optional-field design. `search_records` must preserve the **exact current text for alias=None**, appending bounded alias text only for `Some`. Always including a derived fallback label would change existing FTS records and cause untouched old projects' index-integrity checks to fail. Existing transaction-wide index rebuilding then handles rename/reset/removal and undo/redo without new columns or triggers. Preserve bound SQL/literal phrase quoting, including aliases containing quotes/FTS operator words. SQLite describes transactional writer isolation and FTS5 consistency responsibilities; the existing one-writer transaction plus derived rebuild is appropriate for this small graph. [Transactions](https://www.sqlite.org/lang_transaction.html), [FTS5 documentation](https://www.sqlite.org/fts5.html).
+
+## CLI, Studio and worker integration
+
+Proposed CLI: `media rename --project ... --media-id ... --name "Opening shot"` or `--reset`, and `media remove --project ... --media-id ...`, with the same expected-revision/idempotency/dry-run flags. Add implemented capability entries only when tested; Batch schema derives the commands. Consider `media inspect`/list output including `display_name`, `alias`, original path and usage count if necessary for agent planning; avoid creating another writable media registry.
+
+Studio adds a media-card context menu and a small rename form, displaying original path separately. “Remove from project” accurately names the action and disables/explains removal while referenced; it must not imply deletion from disk. Existing timeline clip deletion remains distinct. Submit through the same revision-aware service. Readonly usage counts are hints; final authoritative validation handles concurrent clients.
+
+After removal, clear/reselect `selected_media` only if that UUID is absent in the new snapshot. Existing clip selection stays valid because used sources cannot be removed by the simple command. Cancel stale import/rename forms across project epochs. For an explicit delete-clips-and-remove batch, clip selection/playhead must be reconciled with the resulting project as already done for clip edits.
+
+Alias changes should not invalidate decoded thumbnails/waveforms because current cache keys contain path/digest/size. Current `Assets::sync` already drops absent entries and bumps its cancellation epoch when the admitted source set changes; verify this behavior and that queued old results cannot resurrect removed cards. Removal may admit the next imported source into the existing128-entry cache bound. Revision-based preview reload currently occurs even for metadata-only changes; keep it initially correct, then measure whether a graph/content fingerprint is worthwhile. Active render jobs retain their admitted snapshot, so rename/removal does not change their source set or output.
+
+## Delivery and acceptance
+
+1. Root records the optional schema1 compatibility decision; core owner adds field/default/omission, display helper, typed commands, validation and receipt IDs. Update Rust `Media` struct literals to explicit `alias:None`; no manifest changes.
+2. Extend existing `search_records` with alias-only text addition and prove old no-alias search/history equality. Reuse current transactions and history restoration; keep source operations untouched.
+3. CLI owner wires flags/schema/capabilities/readable usage; Studio owner adds shared-label/context operations. Update WORKFLOWS/architecture/task progress only after verified behavior.
+4. Test old schema1 snapshots with absent alias: inspect/check/search/undo/backup pass without original-byte mutation. Test Unicode/reset/blank/control/oversized labels, unknown IDs, dry-run, stale revisions, key replay/collision, mixed-batch rollback, FTS quote/operator text and rename/reset undo/redo.
+5. Test used-source rejection, explicit atomic delete-clips+remove, duplicate imports, unused image/audio references, two-client races, restoration after reopening, unchanged source bytes/hashes and clipboard replay after removal. A real admitted render must finish its original snapshot while another client removes an unused reference or executes a deliberately supported clip-removal batch.
+6. Native acceptance confirms card/timeline/inspector labels agree, referenced-removal explanation, absent-selection reconciliation, cache cancellation, and actual source files remain present. Measure rename/remove latency on the current small project and a bounded10k-object synthetic graph before broad cache/evaluator optimization.
+
+SQLite is public domain; this proposal introduces no dependency or licensing change and keeps Lumeryn proprietary. [Official SQLite copyright statement](https://www.sqlite.org/copyright.html). Current image/audio/video placement limitations still apply. Aliases/removal complete a narrow CC-03 subfeature, not composition, independent audio, relinking, source deletion or creative-editor parity.

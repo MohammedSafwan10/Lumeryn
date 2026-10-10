@@ -593,6 +593,7 @@ mod tests {
         )?;
         let id = Uuid::new_v4();
         project.media.push(Media {
+            alias: None,
             id,
             path: "source.mkv".into(),
             metadata,

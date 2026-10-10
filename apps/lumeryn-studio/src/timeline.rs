@@ -126,13 +126,6 @@ impl Lanes {
     }
 }
 
-fn media_label(path: &std::path::Path) -> String {
-    path.file_stem().map_or_else(
-        || "Media".into(),
-        |name| name.to_string_lossy().replace('_', " "),
-    )
-}
-
 impl Timeline {
     pub fn show(
         &mut self,
@@ -272,7 +265,7 @@ impl Timeline {
                 }
                 let footer = Rect::from_min_max(pos2(block.left(), block.bottom()-27.0), block.right_bottom());
                 clip_painter.rect_filled(footer, 0.0, Color32::from_black_alpha(185));
-                let label = project.media.iter().find(|m| m.id == clip.media_id).map_or_else(|| "Media".into(), |media| media_label(&media.path));
+                let label = project.media.iter().find(|m| m.id == clip.media_id).map_or_else(|| "Media".into(), |media| media.display_name());
                 let label_right = if block.width()>180.0 {block.right()-64.0} else {block.right()-6.0};
                 let label_painter = clip_painter.with_clip_rect(Rect::from_min_max(footer.left_top(),pos2(label_right,footer.bottom())).intersect(clipped));
                 label_painter.text(pos2(block.left()+10.0, footer.center().y), Align2::LEFT_CENTER, label, FontId::proportional(13.0), design::TEXT);
@@ -399,10 +392,6 @@ mod tests {
             assert!(rect.contains_rect(lanes.audio));
             assert!(lanes.video.bottom() < lanes.audio.top());
         }
-        assert_eq!(
-            media_label(std::path::Path::new("moving_fixture_720p.mp4")),
-            "moving fixture 720p"
-        );
     }
 
     #[test]
@@ -416,6 +405,7 @@ mod tests {
         let mut project = Project::new("Timeline benchmark".into(), 1920, 1080, rate)?;
         let media_id = Uuid::new_v4();
         project.media.push(Media {
+            alias: None,
             id: media_id,
             path: "synthetic.mp4".into(),
             metadata: Metadata {

@@ -81,6 +81,7 @@ fn fixture_size(
     let mut project = Project::new("Preview fixture".into(), width, height, rate)?;
     let media_id = Uuid::new_v4();
     project.media.push(Media {
+        alias: None,
         id: media_id,
         path: PathBuf::from("source.mkv"),
         metadata,

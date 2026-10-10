@@ -10,6 +10,20 @@ pub const ACCENT: Color32 = Color32::from_rgb(106, 247, 203);
 pub const WARNING: Color32 = Color32::from_rgb(255, 193, 116);
 
 pub fn configure(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "Lumeryn Inter".into(),
+        egui::FontData::from_static(include_bytes!(
+            "../../../assets/library/packs/inter.v4.1/Inter[opsz,wght].ttf"
+        ))
+        .into(),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "Lumeryn Inter".into());
+    ctx.set_fonts(fonts);
     let mut style = egui::Style {
         visuals: egui::Visuals::dark(),
         ..Default::default()
@@ -33,7 +47,7 @@ pub fn configure(ctx: &egui::Context) {
     style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT);
     style.visuals.widgets.active.bg_fill = Color32::from_rgb(39, 84, 74);
     style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
-    style.spacing.item_spacing = egui::vec2(10.0, 10.0);
+    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
     style.spacing.button_padding = egui::vec2(14.0, 8.0);
     style.spacing.interact_size.y = 36.0;
     style.drag_value_text_style = TextStyle::Body;
