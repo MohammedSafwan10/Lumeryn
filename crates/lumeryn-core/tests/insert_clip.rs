@@ -148,6 +148,18 @@ async fn gaps_overlaps_and_nonzero_start_are_rejected_without_repacking() -> Res
     for (index, at_frame) in [(1, 31), (1, 29), (0, 1)] {
         let mut original = fixture()?;
         original.clips[index].at_frame = at_frame;
+        if (index, at_frame) == (1, 29) {
+            // Schema 3 rejects same-track overlap even before sequence insertion.
+            assert!(matches!(original.validate(), Err(Error::Invalid(_))));
+            continue;
+        }
+        if index == 0 {
+            for clip in original.clips.iter_mut().skip(1) {
+                clip.at_frame += 1;
+            }
+        } else {
+            original.clips[2].at_frame += 1;
+        }
         let (_dir, mut store) = store_for(&original).await?;
         assert!(matches!(
             apply(&mut store, insert(&original, None), 0).await,

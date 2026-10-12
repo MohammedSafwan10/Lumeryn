@@ -520,6 +520,7 @@ mod tests {
             width: 128,
             height: 72,
             audio_plan: Some(audio_plan),
+            visual_plan: None,
         };
         let shared = Arc::new(Shared {
             buffer: Mutex::new(Buffer {

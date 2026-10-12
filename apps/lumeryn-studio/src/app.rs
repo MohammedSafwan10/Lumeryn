@@ -121,6 +121,18 @@ struct EditorLayout {
     timeline: egui::Rect,
 }
 impl EditorLayout {
+    fn with_visual_rows(mut self, rows: usize) -> Self {
+        if rows > 0 {
+            let available = self.preview.height() + self.timeline.height();
+            let height = (96.0 + rows as f32 * 60.0)
+                .min(available * 0.50)
+                .max(self.timeline.height());
+            let top = self.timeline.bottom() - height;
+            self.preview.max.y = top;
+            self.timeline.min.y = top;
+        }
+        self
+    }
     fn new(bounds: egui::Rect, drawers: Drawers) -> Self {
         let rail_width = 68.0_f32.min(bounds.width() / 4.0);
         let left_rail = egui::Rect::from_min_max(
@@ -225,6 +237,8 @@ struct ImportCard {
 }
 
 pub struct Session {
+    visual_form: Option<VisualForm>,
+    target_layer: Option<Uuid>,
     backend: Backend,
     pub project: Option<Project>,
     pub database: Option<PathBuf>,
@@ -254,7 +268,7 @@ pub struct Session {
     pub history: Vec<Value>,
     history_state: Option<lumeryn_core::storage::HistoryState>,
     pub events: VecDeque<lumeryn_service::Event>,
-    edit_busy: bool,
+    pub(crate) edit_busy: bool,
     pub render_busy: bool,
     active_job: Option<Uuid>,
     output_input: String,
@@ -284,6 +298,19 @@ pub struct Session {
     pub viewport_size: Vec2,
     pub pixels_per_point: f32,
     pub native_fullscreen: Option<bool>,
+}
+
+struct VisualForm {
+    clip: Uuid,
+    revision: u64,
+    at: u64,
+    duration: u64,
+    source: u64,
+    custom: bool,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
 }
 
 impl Session {
@@ -326,6 +353,8 @@ impl Session {
                 .map_or_else(String::new, |p| p.display().to_string()),
             media_input: String::new(),
             selected: None,
+            visual_form: None,
+            target_layer: None,
             trim_source: 0,
             trim_duration: 1,
             audio_gain_db: 0.0,
@@ -593,7 +622,7 @@ impl Session {
                             if let Err(error) = preview.load(project.clone(), path.clone()) {
                                 self.fail(format!("Preview load: {error}"));
                             } else {
-                                self.frame_wait_until = (!project.clips.is_empty())
+                                self.frame_wait_until = (project.visual_duration_frames() > 0)
                                     .then(|| Instant::now() + Duration::from_secs(30));
                                 self.pending_seek = (self.playhead != 0)
                                     .then_some((project.revision, self.playhead));
@@ -605,6 +634,7 @@ impl Session {
                         if self.selected.is_none_or(|id| {
                             !project.clips.iter().any(|clip| clip.id == id)
                                 && !project.audio_clips.iter().any(|clip| clip.id == id)
+                                && !project.visual_clips.iter().any(|clip| clip.id == id)
                         }) {
                             self.selected = project
                                 .clips
@@ -862,6 +892,7 @@ impl Session {
     }
 
     pub(crate) fn select(&mut self, id: Uuid) {
+        self.visual_form = None;
         self.selected = Some(id);
         if let Some(clip) = self
             .project
@@ -971,6 +1002,17 @@ impl Session {
         }
     }
     fn copy_clip(&mut self, ctx: &egui::Context, id: Uuid) {
+        if self
+            .project
+            .as_ref()
+            .is_some_and(|p| p.visual_clips.iter().any(|c| c.id == id))
+        {
+            self.fail(
+                "Overlay clipboard transfer is not available yet; add the verified source again."
+                    .into(),
+            );
+            return;
+        }
         let result = self
             .project
             .as_ref()
@@ -1083,7 +1125,7 @@ impl Session {
             "Apply audio",
         )
     }
-    fn edit_batch(&mut self, batch: Batch, label: &str) -> bool {
+    pub(crate) fn edit_batch(&mut self, batch: Batch, label: &str) -> bool {
         if !self.connected || self.edit_busy {
             return false;
         }
@@ -1185,7 +1227,10 @@ impl Session {
                             .set_title("Import media")
                             .add_filter(
                                 "Media",
-                                &["mp4", "mov", "mkv", "avi", "webm", "wav", "mp3", "flac"],
+                                &[
+                                    "mp4", "mov", "mkv", "avi", "webm", "wav", "mp3", "flac",
+                                    "ogg", "png",
+                                ],
                             )
                             .pick_file(),
                         Picker::Export => dialog
@@ -1351,15 +1396,62 @@ impl Session {
         let mut add_audio = None;
         let mut rename = None;
         let mut remove = None;
+        let mut add_layer = false;
+        let mut add_overlay = None;
+        if project.schema_version == lumeryn_core::model::SCHEMA_VERSION {
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        self.connected && !self.edit_busy && project.visual_tracks.len() < 2,
+                        egui::Button::new("+ Layer"),
+                    )
+                    .clicked()
+                {
+                    add_layer = true;
+                }
+                egui::ComboBox::from_id_salt("target-visual-layer")
+                    .selected_text(
+                        project
+                            .visual_tracks
+                            .iter()
+                            .find(|t| Some(t.id) == self.target_layer)
+                            .or_else(|| project.visual_tracks.last())
+                            .map_or("Choose layer", |t| t.name.as_str()),
+                    )
+                    .show_ui(ui, |ui| {
+                        for track in &project.visual_tracks {
+                            ui.selectable_value(
+                                &mut self.target_layer,
+                                Some(track.id),
+                                &track.name,
+                            );
+                        }
+                    });
+            });
+        }
         let width = (ui.available_width() - 12.0) / 2.0;
         let media: Vec<_> = if self.recent_media {
             project.media.iter().rev().collect()
         } else {
             project.media.iter().collect()
         };
+        // A video can offer both primary-timeline and overlay actions. Reserve all
+        // of them, including the source-rate label, rather than a fixed one-row footer.
+        // Reserve the video case during selection changes so no frame clips a new action.
+        let footer_buttons = if project.visual_tracks.is_empty() {
+            1
+        } else {
+            2
+        };
+        let footer_has_details = project
+            .media
+            .iter()
+            .any(|media| media.metadata.video.is_some());
+        let footer_height = media_footer_height(ui, footer_buttons, footer_has_details);
         egui::ScrollArea::vertical()
+            .id_salt("project-media-grid")
             .auto_shrink([false, false])
-            .max_height((ui.available_height() - 70.0).max(80.0))
+            .max_height((ui.available_height() - footer_height).max(0.0))
             .show(ui, |ui| {
                 for pair in media.chunks(2) {
                     ui.horizontal_top(|ui| {
@@ -1370,18 +1462,16 @@ impl Session {
                                     Vec2::new(width, width * 9.0 / 16.0),
                                     Sense::click_and_drag(),
                                 );
-                                if self.connected
-                                    && !self.edit_busy
-                                    && !still_png(media)
-                                    && response.drag_started_by(egui::PointerButton::Primary)
-                                {
-                                    response.dnd_set_drag_payload(timeline::DragPayload {
+                                media_card_drag(
+                                    &response,
+                                    self.connected && !self.edit_busy,
+                                    timeline::DragPayload {
                                         project: project.id,
                                         revision: project.revision,
                                         epoch: self.epoch,
                                         source: timeline::DragSource::Media(media.id),
-                                    });
-                                }
+                                    },
+                                );
                                 ui.painter().rect_filled(rect, 4.0, design::BACKGROUND);
                                 if let Some(texture) =
                                     self.assets.as_ref().and_then(|a| a.thumbnail(media.id))
@@ -1522,7 +1612,7 @@ impl Session {
                                             .audio_clips
                                             .iter()
                                             .filter(|clip| clip.media_id == media.id)
-                                            .count();
+                                            .count() + project.visual_clips.iter().filter(|clip|clip.media_id==media.id).count();
                                     if ui
                                         .add_enabled(
                                             enabled && usage == 0,
@@ -1549,13 +1639,13 @@ impl Session {
                                     );
                                 });
                                 response.on_hover_text(if still_png(media) {
-                                    "Image timeline placement is coming soon."
+                                    "Create a layer, then drag this image onto it or add it at the playhead."
                                 } else if media.metadata.video.is_some() {
-                                    "Drag to a video boundary. Double-click to append."
+                                    "Drag to a compatible visual row. Double-click to append to Video 1."
                                 } else if media.metadata.audio.is_some() {
                                     "Drag onto Audio 1. Double-click to add at the playhead."
                                 } else {
-                                    "Image timeline placement is coming soon."
+                                    "This source has no supported video or audio stream."
                                 });
                                 ui.add(egui::Label::new(media_name(media)).truncate())
                                     .on_hover_text(media.path.display().to_string());
@@ -1582,18 +1672,22 @@ impl Session {
                     );
                 }
             });
-        if let Some(video) = project
+        if let Some(media) = project
             .media
             .iter()
             .find(|media| Some(media.id) == self.selected_media)
-            .and_then(|media| media.metadata.video.as_ref())
+            && let Some(video) = &media.metadata.video
         {
             ui.label(
-                RichText::new(format!(
-                    "Source {} · timeline {}",
-                    rate_label(video.frame_rate),
-                    rate_label(project.frame_rate)
-                ))
+                RichText::new(if still_png(media) {
+                    format!("Still image - timeline {}", rate_label(project.frame_rate))
+                } else {
+                    format!(
+                        "Source {} - timeline {}",
+                        rate_label(video.frame_rate),
+                        rate_label(project.frame_rate)
+                    )
+                })
                 .small()
                 .color(design::MUTED),
             );
@@ -1614,6 +1708,29 @@ impl Session {
                 .clicked()
         {
             add = Some((media.id, video.frames));
+        }
+        if let Some(media) = project
+            .media
+            .iter()
+            .find(|m| Some(m.id) == self.selected_media)
+            && media.metadata.video.is_some()
+            && let Some(track) = self
+                .target_layer
+                .filter(|id| project.visual_tracks.iter().any(|t| t.id == *id))
+                .or_else(|| project.visual_tracks.last().map(|t| t.id))
+            && ui
+                .add_enabled(
+                    self.connected && !self.edit_busy,
+                    egui::Button::new(if still_png(media) {
+                        "Add image at playhead"
+                    } else {
+                        "Add video to layer"
+                    })
+                    .min_size(Vec2::new(ui.available_width(), 36.0)),
+                )
+                .clicked()
+        {
+            add_overlay = Some((media.id, track));
         }
         if let Some(rename) = rename {
             self.media_rename = Some(rename);
@@ -1639,6 +1756,15 @@ impl Session {
         }
         if let Some(id) = remove {
             self.remove_media(id);
+        } else if add_layer {
+            let id = Uuid::new_v4();
+            let name = format!("Layer {}", project.visual_tracks.len() + 1);
+            self.target_layer = Some(id);
+            self.edit(Edit::AddVisualTrack { id, name }, "Add visual layer");
+        } else if let Some((media, track)) = add_overlay {
+            if let Some(payload) = self.drag_payload(timeline::DragSource::Media(media)) {
+                self.drop_visual(payload, track, self.playhead);
+            }
         } else if let Some((media_id, duration_frames)) = add {
             self.edit(
                 Edit::InsertClip {
@@ -1738,7 +1864,11 @@ impl Session {
             ui.painter().text(
                 image_rect.center(),
                 egui::Align2::CENTER_CENTER,
-                if self.project.as_ref().is_some_and(|p| !p.clips.is_empty()) {
+                if self
+                    .project
+                    .as_ref()
+                    .is_some_and(|p| p.visual_duration_frames() > 0)
+                {
                     "Loading your preview…"
                 } else if self.project.is_some() {
                     "Your video preview"
@@ -1789,7 +1919,7 @@ impl Session {
         if self
             .project
             .as_ref()
-            .is_none_or(|project| project.clips.is_empty())
+            .is_none_or(|project| project.visual_duration_frames() == 0)
         {
             return;
         }
@@ -1935,6 +2065,14 @@ impl Session {
         });
     }
     fn inspector(&mut self, ui: &mut egui::Ui) {
+        if self
+            .project
+            .as_ref()
+            .is_some_and(|p| p.visual_clips.iter().any(|c| Some(c.id) == self.selected))
+        {
+            self.visual_inspector(ui);
+            return;
+        }
         if self.project.as_ref().is_some_and(|project| {
             project
                 .audio_clips
@@ -2093,6 +2231,55 @@ impl Session {
             );
             for action in actions {
                 match action {
+                    timeline::Action::ReorderVisualTrack { track_id, before } => {
+                        self.edit(
+                            Edit::ReorderVisualTrack {
+                                track_id,
+                                before_track_id: before,
+                            },
+                            "Reorder layer",
+                        );
+                    }
+                    timeline::Action::DeleteVisualTrack(track_id) => {
+                        self.edit(Edit::DeleteVisualTrack { track_id }, "Remove empty layer");
+                    }
+                    timeline::Action::DropVisual {
+                        payload,
+                        track_id,
+                        at_frame,
+                    } => self.drop_visual(payload, track_id, at_frame),
+                    timeline::Action::MovePrimary { clip_id, at_frame } => {
+                        if !self.project.as_ref().is_some_and(|p| {
+                            p.clips
+                                .iter()
+                                .any(|c| c.id == clip_id && c.at_frame == at_frame)
+                        }) {
+                            self.edit(Edit::MoveClip { clip_id, at_frame }, "Move clip");
+                        }
+                    }
+                    timeline::Action::DeleteVisual(clip_id) => {
+                        self.edit(
+                            Edit::DeleteVisualClip { clip_id },
+                            "Delete visual layer clip",
+                        );
+                    }
+                    timeline::Action::TrimVisual { clip_id, duration } => {
+                        if let Some(clip) = self
+                            .project
+                            .as_ref()
+                            .and_then(|p| p.visual_clips.iter().find(|c| c.id == clip_id))
+                        {
+                            self.edit(
+                                Edit::SetVisualRange {
+                                    clip_id,
+                                    at_frame: clip.at_frame,
+                                    duration_frames: duration,
+                                    source: clip.source.clone(),
+                                },
+                                "Trim layer clip",
+                            );
+                        }
+                    }
                     timeline::Action::Select(id) => self.select(id),
                     timeline::Action::Seek(frame) => self.seek(frame),
                     timeline::Action::Trim { clip, duration } => {
@@ -2127,7 +2314,10 @@ impl Session {
                         self.edit(
                             Edit::DeleteClip {
                                 clip_id,
-                                ripple: true,
+                                ripple: !self
+                                    .project
+                                    .as_ref()
+                                    .is_some_and(Project::uses_composition),
                             },
                             "Delete clip",
                         );
@@ -2162,6 +2352,277 @@ impl Session {
                 "Your timeline",
                 "Import a video and add it here to start editing.",
             );
+        }
+    }
+    pub(crate) fn drop_visual(
+        &mut self,
+        payload: timeline::DragPayload,
+        track_id: Uuid,
+        at_frame: u64,
+    ) {
+        use lumeryn_core::model::VisualSource;
+        let Some(project) = &self.project else {
+            return;
+        };
+        if payload.project != project.id
+            || payload.revision != project.revision
+            || payload.epoch != self.epoch
+            || !self.connected
+            || self.edit_busy
+        {
+            self.fail("The project changed during this drag. Drag again.".into());
+            return;
+        }
+        let operation = match payload.source {
+            timeline::DragSource::VisualClip { clip, .. } => {
+                if project
+                    .visual_clips
+                    .iter()
+                    .any(|c| c.id == clip && c.track_id == track_id && c.at_frame == at_frame)
+                {
+                    return;
+                }
+                Edit::MoveVisualClip {
+                    clip_id: clip,
+                    track_id,
+                    at_frame,
+                }
+            }
+            timeline::DragSource::Media(id) => {
+                let Some(media) = project.media.iter().find(|m| m.id == id) else {
+                    return;
+                };
+                let Some(video) = &media.metadata.video else {
+                    self.fail("Select a verified video or PNG.".into());
+                    return;
+                };
+                let image = still_png(media);
+                if track_id == project.video_track_id {
+                    if image {
+                        self.fail("Add a layer for the image, then drop it there.".into());
+                        return;
+                    }
+                    Edit::AddClip {
+                        id: Uuid::new_v4(),
+                        media_id: id,
+                        at_frame,
+                        source_in_frame: 0,
+                        duration_frames: video.frames,
+                    }
+                } else {
+                    let duration = if image {
+                        (u64::from(project.frame_rate.numerator()) * 5
+                            / u64::from(project.frame_rate.denominator()))
+                        .max(1)
+                    } else {
+                        video.frames
+                    };
+                    Edit::AddVisualClip {
+                        id: Uuid::new_v4(),
+                        media_id: id,
+                        track_id,
+                        at_frame,
+                        duration_frames: duration,
+                        source: if image {
+                            VisualSource::Image {}
+                        } else {
+                            VisualSource::Video { source_in_frame: 0 }
+                        },
+                        placement: None,
+                    }
+                }
+            }
+            _ => {
+                self.fail("Drop a compatible visual source on this layer.".into());
+                return;
+            }
+        };
+        self.edit(operation, "Place visual clip");
+    }
+
+    fn visual_inspector(&mut self, ui: &mut egui::Ui) {
+        use lumeryn_core::model::{VisualPlacement, VisualSource};
+        let Some(project) = &self.project else {
+            return;
+        };
+        let Some(clip) = project
+            .visual_clips
+            .iter()
+            .find(|c| Some(c.id) == self.selected)
+        else {
+            return;
+        };
+        if self
+            .visual_form
+            .as_ref()
+            .is_none_or(|f| f.clip != clip.id || f.revision != project.revision)
+        {
+            let rect = clip.placement.clone().unwrap_or(VisualPlacement {
+                x: 0,
+                y: 0,
+                width: project.width,
+                height: project.height,
+            });
+            self.visual_form = Some(VisualForm {
+                clip: clip.id,
+                revision: project.revision,
+                at: clip.at_frame,
+                duration: clip.duration_frames,
+                source: match clip.source {
+                    VisualSource::Video { source_in_frame } => source_in_frame,
+                    VisualSource::Image {} => 0,
+                },
+                custom: clip.placement.is_some(),
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+            });
+        }
+        let id = clip.id;
+        let image = matches!(clip.source, VisualSource::Image {});
+        let title = project
+            .media
+            .iter()
+            .find(|m| m.id == clip.media_id)
+            .map_or_else(|| "Visual clip".into(), |m| m.display_name());
+        ui.heading(title);
+        ui.add_space(8.0);
+        let Some(form) = &mut self.visual_form else {
+            return;
+        };
+        let mut apply = false;
+        let mut delete = false;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.label(if image { "Image hold" } else { "Video overlay" });
+            let fps = f64::from(project.frame_rate.numerator())
+                / f64::from(project.frame_rate.denominator());
+            let mut start = form.at as f64 / fps;
+            let mut length = form.duration as f64 / fps;
+            let mut source = form.source as f64 / fps;
+            egui::Grid::new("visual-range")
+                .num_columns(2)
+                .spacing(Vec2::new(10.0, 8.0))
+                .show(ui, |ui| {
+                    ui.label("Timeline start");
+                    ui.add(
+                        egui::DragValue::new(&mut start)
+                            .speed(1.0 / fps)
+                            .range(0.0..=lumeryn_core::model::MAX_FRAMES as f64 / fps)
+                            .custom_formatter(|v, _| timecode(v, true))
+                            .custom_parser(parse_timecode),
+                    );
+                    ui.end_row();
+                    ui.label("Length");
+                    ui.add(
+                        egui::DragValue::new(&mut length)
+                            .speed(1.0 / fps)
+                            .range(1.0 / fps..=lumeryn_core::model::MAX_FRAMES as f64 / fps)
+                            .custom_formatter(|v, _| timecode(v, true))
+                            .custom_parser(parse_timecode),
+                    );
+                    ui.end_row();
+                    if !image {
+                        ui.label("Source start");
+                        ui.add(
+                            egui::DragValue::new(&mut source)
+                                .speed(1.0 / fps)
+                                .range(0.0..=lumeryn_core::model::MAX_FRAMES as f64 / fps)
+                                .custom_formatter(|v, _| timecode(v, true))
+                                .custom_parser(parse_timecode),
+                        );
+                        ui.end_row();
+                    }
+                });
+            form.at = (start * fps).round() as u64;
+            form.duration = (length * fps).round().max(1.0) as u64;
+            form.source = (source * fps).round() as u64;
+            ui.collapsing("Exact frames", |ui| {
+                ui.label(format!(
+                    "Start {} · length {} · source {}",
+                    form.at, form.duration, form.source
+                ));
+            });
+            ui.separator();
+            ui.label(RichText::new("Position & size").strong());
+            ui.checkbox(&mut form.custom, "Custom rectangle");
+            if form.custom {
+                ui.scope(|ui| {
+                    egui::Grid::new("visual-rect")
+                        .num_columns(2)
+                        .spacing(Vec2::new(10.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.label("Left");
+                            ui.add(egui::DragValue::new(&mut form.x).range(-8192..=8192));
+                            ui.end_row();
+                            ui.label("Top");
+                            ui.add(egui::DragValue::new(&mut form.y).range(-8192..=8192));
+                            ui.end_row();
+                            ui.label("Width");
+                            ui.add(egui::DragValue::new(&mut form.width).range(1..=3840));
+                            ui.end_row();
+                            ui.label("Height");
+                            ui.add(egui::DragValue::new(&mut form.height).range(1..=3840));
+                            ui.end_row();
+                        });
+                    if ui.button("Picture in picture").clicked() {
+                        form.width = (project.width / 3).max(2);
+                        form.height = (project.height / 3).max(2);
+                        form.x = (project.width - form.width) as i32;
+                        form.y = (project.height - form.height) as i32;
+                    }
+                });
+            }
+            ui.label(
+                RichText::new(
+                    "Aspect ratio is preserved. Clear Custom rectangle to fit the canvas.",
+                )
+                .small()
+                .color(design::MUTED),
+            );
+            ui.add_space(8.0);
+            apply = design::primary(
+                ui,
+                "Apply changes",
+                self.connected && !self.edit_busy,
+                ui.available_width(),
+            )
+            .clicked();
+            ui.add_space(8.0);
+            delete = ui
+                .add_enabled(
+                    self.connected && !self.edit_busy,
+                    egui::Button::new("Remove from timeline"),
+                )
+                .clicked();
+        });
+        if apply {
+            let operations = vec![
+                Edit::SetVisualRange {
+                    clip_id: id,
+                    at_frame: form.at,
+                    duration_frames: form.duration,
+                    source: if image {
+                        VisualSource::Image {}
+                    } else {
+                        VisualSource::Video {
+                            source_in_frame: form.source,
+                        }
+                    },
+                },
+                Edit::SetVisualPlacement {
+                    clip_id: id,
+                    placement: form.custom.then_some(VisualPlacement {
+                        x: form.x,
+                        y: form.y,
+                        width: form.width,
+                        height: form.height,
+                    }),
+                },
+            ];
+            self.edit_batch(Batch { operations }, "Edit visual clip");
+        } else if delete {
+            self.edit(Edit::DeleteVisualClip { clip_id: id }, "Delete visual clip");
         }
     }
     pub(crate) fn drag_payload(
@@ -2215,7 +2676,7 @@ impl Session {
                     duration_frames: video.frames,
                 }
             }
-            timeline::DragSource::AudioClip { .. } => {
+            timeline::DragSource::AudioClip { .. } | timeline::DragSource::VisualClip { .. } => {
                 self.fail("Drop independent audio on Audio 1.".into());
                 return false;
             }
@@ -2296,7 +2757,7 @@ impl Session {
                     muted: false,
                 }
             }
-            timeline::DragSource::Clip(_) => {
+            timeline::DragSource::Clip(_) | timeline::DragSource::VisualClip { .. } => {
                 self.fail("Use an imported audio source on Audio 1.".into());
                 return false;
             }
@@ -2485,7 +2946,7 @@ impl Session {
         if self
             .project
             .as_ref()
-            .is_some_and(|project| project.schema_version == 1)
+            .is_some_and(|project| project.schema_version < lumeryn_core::model::SCHEMA_VERSION)
         {
             ui.label(RichText::new("Upgrade for audio editing").strong());
             ui.label(RichText::new("Creates a local backup, then upgrades every revision without changing your edit history. Older builds cannot edit the upgraded project.").small().color(design::MUTED));
@@ -2532,7 +2993,9 @@ impl Session {
         ui.add_space(12.0);
         let current_rate = project.frame_rate;
         let mut selected_rate = current_rate;
-        let rate_locked = !project.clips.is_empty() || !project.audio_clips.is_empty();
+        let rate_locked = project.visual_duration_frames() > 0
+            || !project.visual_clips.is_empty()
+            || !project.audio_clips.is_empty();
         let first_video_eligible = !rate_locked
             && !project.media.iter().any(|media| {
                 media
@@ -3157,10 +3620,14 @@ impl Studio {
             session.playhead = options.capture_frame;
         }
         let smoke = if options.smoke {
-            options
-                .artifact_dir
-                .clone()
-                .map(|directory| Smoke::new(directory, options.smoke_history, options.smoke_audio))
+            options.artifact_dir.clone().map(|directory| {
+                Smoke::new(
+                    directory,
+                    options.smoke_history,
+                    options.smoke_audio,
+                    options.smoke_composition,
+                )
+            })
         } else {
             None
         };
@@ -3202,7 +3669,7 @@ impl Studio {
                 active: if options.capture_only
                     && matches!(
                         options.capture_state,
-                        CaptureState::Inspector | CaptureState::Audio
+                        CaptureState::Inspector | CaptureState::Visual | CaptureState::Audio
                     ) {
                     RailSide::Right
                 } else {
@@ -3287,7 +3754,7 @@ impl Studio {
                     self.session
                         .project
                         .as_ref()
-                        .is_some_and(|p| !p.clips.is_empty()),
+                        .is_some_and(|p| p.visual_duration_frames() > 0),
                     112.0,
                 )
                 .clicked()
@@ -3329,7 +3796,13 @@ impl Studio {
     fn editor(&mut self, ui: &mut egui::Ui, bounds: egui::Rect) {
         let compact = bounds.width() < 1160.0;
         let (left_drawer, right_drawer) = self.drawers.visible(compact);
-        let layout = EditorLayout::new(bounds, self.drawers);
+        let visual_rows = self
+            .session
+            .project
+            .as_ref()
+            .filter(|p| !p.visual_tracks.is_empty() || p.uses_composition())
+            .map_or(0, |p| p.visual_tracks.len() + 3);
+        let layout = EditorLayout::new(bounds, self.drawers).with_visual_rows(visual_rows);
         pane(ui, "left-rail", layout.left_rail, 4, |ui| {
             if design::rail_button(
                 ui,
@@ -3441,6 +3914,18 @@ impl Studio {
             && let Some(project) = &self.session.project
         {
             let media_id = match payload.source {
+                timeline::DragSource::VisualClip { clip, .. } => project
+                    .visual_clips
+                    .iter()
+                    .find(|c| c.id == clip)
+                    .map(|c| c.media_id)
+                    .or_else(|| {
+                        project
+                            .clips
+                            .iter()
+                            .find(|c| c.id == clip)
+                            .map(|c| c.media_id)
+                    }),
                 timeline::DragSource::Media(id) => Some(id),
                 timeline::DragSource::Clip(id) => project
                     .clips
@@ -3621,7 +4106,15 @@ impl eframe::App for Studio {
                 && let Some(clip_id) = self.session.selected
             {
                 if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
-                    if self.session.project.as_ref().is_some_and(|project| {
+                    if self
+                        .session
+                        .project
+                        .as_ref()
+                        .is_some_and(|project| project.visual_clips.iter().any(|c| c.id == clip_id))
+                    {
+                        self.session
+                            .edit(Edit::DeleteVisualClip { clip_id }, "Delete visual clip");
+                    } else if self.session.project.as_ref().is_some_and(|project| {
                         project.audio_clips.iter().any(|clip| clip.id == clip_id)
                     }) {
                         self.session
@@ -3630,17 +4123,28 @@ impl eframe::App for Studio {
                         self.session.edit(
                             Edit::DeleteClip {
                                 clip_id,
-                                ripple: true,
+                                ripple: !self
+                                    .session
+                                    .project
+                                    .as_ref()
+                                    .is_some_and(Project::uses_composition),
                             },
                             "Delete clip",
                         );
                     }
                 } else if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::D)) {
-                    if self.session.project.as_ref().is_some_and(|project| {
+                    if self
+                        .session
+                        .project
+                        .as_ref()
+                        .is_some_and(|p| p.visual_clips.iter().any(|c| c.id == clip_id))
+                    {
+                        self.session.fail("Visual duplication is not available yet; add the source to the layer again.".into());
+                    } else if self.session.project.as_ref().is_some_and(|project| {
                         project.audio_clips.iter().any(|clip| clip.id == clip_id)
                     }) {
                         self.session.fail(
-                            "Audio duplication is not implemented; add the source again.".into(),
+                            "Duplication for this audio/overlay selection is not available; add the source again.".into(),
                         );
                     } else {
                         self.session.edit(
@@ -3652,7 +4156,17 @@ impl eframe::App for Studio {
                         );
                     }
                 } else if ctx.input(|i| !i.modifiers.command && i.key_pressed(egui::Key::S)) {
-                    if self.session.project.as_ref().is_some_and(|project| {
+                    if self
+                        .session
+                        .project
+                        .as_ref()
+                        .is_some_and(|p| p.visual_clips.iter().any(|c| c.id == clip_id))
+                    {
+                        self.session.fail(
+                            "Overlay splitting is not available yet; use its range controls."
+                                .into(),
+                        );
+                    } else if self.session.project.as_ref().is_some_and(|project| {
                         project.audio_clips.iter().any(|clip| clip.id == clip_id)
                     }) {
                         self.session.fail(
@@ -3706,7 +4220,7 @@ impl eframe::App for Studio {
                     .session
                     .project
                     .as_ref()
-                    .is_some_and(|project| !project.clips.is_empty())
+                    .is_some_and(|project| project.visual_duration_frames() > 0)
             {
                 self.fullscreen = !self.fullscreen;
             }
@@ -3791,7 +4305,7 @@ impl eframe::App for Studio {
                         .session
                         .project
                         .as_ref()
-                        .is_some_and(|project| project.clips.is_empty())
+                        .is_some_and(|project| project.visual_duration_frames() == 0)
             {
                 if self.session.project_input.is_empty() {
                     self.session.project.is_none()
@@ -3801,15 +4315,31 @@ impl eframe::App for Studio {
                             .session
                             .project
                             .as_ref()
-                            .is_some_and(|project| project.clips.is_empty())
+                            .is_some_and(|project| project.visual_duration_frames() == 0)
                 }
             } else if let Some(project) = &self.session.project {
                 let revision = project.revision;
+                if self.capture_state == CaptureState::Media {
+                    self.session.selected_media = project
+                        .media
+                        .iter()
+                        .find(|media| media.metadata.video.is_some() && !still_png(media))
+                        .map(|media| media.id);
+                }
                 let target = self
                     .capture_frame
                     .min(timeline::total_frames(project).saturating_sub(1));
                 let clip = if self.capture_state == CaptureState::Audio {
                     project.audio_clips.first().map(|clip| clip.id)
+                } else if self.capture_state == CaptureState::Visual {
+                    project
+                        .visual_clips
+                        .iter()
+                        .rev()
+                        .find(|clip| {
+                            clip.at_frame <= target && target < clip.at_frame + clip.duration_frames
+                        })
+                        .map(|clip| clip.id)
                 } else {
                     project
                         .clips
@@ -3866,6 +4396,30 @@ impl eframe::App for Studio {
         }
     }
 }
+
+pub(crate) fn media_card_drag(
+    response: &egui::Response,
+    editable: bool,
+    payload: timeline::DragPayload,
+) {
+    // Verified PNGs, video and audio share the source gesture. Target rows own
+    // compatibility checks, so PNGs remain rejected by Video 1 and Audio 1.
+    if editable && response.drag_started_by(egui::PointerButton::Primary) {
+        response.dnd_set_drag_payload(payload);
+    }
+}
+
+fn media_footer_height(ui: &egui::Ui, buttons: usize, show_details: bool) -> f32 {
+    let spacing = ui.spacing().item_spacing.y;
+    let button_height = ui.spacing().interact_size.y.max(36.0);
+    buttons as f32 * (button_height + spacing)
+        + if show_details {
+            ui.text_style_height(&egui::TextStyle::Small) + spacing
+        } else {
+            0.0
+        }
+        + spacing
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3898,6 +4452,185 @@ mod tests {
         assert_eq!(drawers.visible(true), (None, None));
         drawers.toggle_left(LeftDrawer::Media, true);
         assert_eq!(drawers.visible(true), (Some(LeftDrawer::Media), None));
+    }
+
+    #[test]
+    fn scrollable_media_keeps_both_footer_actions_inside_short_drawers() {
+        for height in [180.0, 300.0, 500.0] {
+            let ctx = egui::Context::default();
+            design::configure(&ctx);
+            let mut rects = Vec::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(260.0, height),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.scope(|ui| {
+                        let bounds = ui.available_rect_before_wrap();
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .max_height(
+                                (ui.available_height() - media_footer_height(ui, 2, true)).max(0.0),
+                            )
+                            .show(ui, |ui| {
+                                for _ in 0..30 {
+                                    ui.allocate_space(Vec2::new(100.0, 60.0));
+                                }
+                            });
+                        ui.label(RichText::new("Source 60 fps - timeline 60 fps").small());
+                        for label in ["Add to timeline", "Add video to layer"] {
+                            let response = ui.add(
+                                egui::Button::new(label)
+                                    .min_size(Vec2::new(ui.available_width(), 36.0)),
+                            );
+                            rects.push((bounds, response.rect));
+                        }
+                    });
+                },
+            );
+            assert!(!output.shapes.is_empty());
+            output.textures_delta.clear();
+            assert_eq!(rects.len(), 2);
+            for (bounds, button) in rects {
+                assert!(
+                    bounds.contains_rect(button),
+                    "{height}: {button:?} in {bounds:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn real_media_panel_drags_png_video_and_audio_only_when_editable() -> lumeryn_core::Result<()> {
+        use clap::Parser;
+        use lumeryn_core::{
+            media::{Audio, Metadata, Video},
+            model::Media,
+        };
+        for (codec, connected, busy, button) in [
+            ("png", true, false, egui::PointerButton::Primary),
+            ("ffv1", true, false, egui::PointerButton::Primary),
+            ("audio", true, false, egui::PointerButton::Primary),
+            ("png", false, false, egui::PointerButton::Primary),
+            ("png", true, true, egui::PointerButton::Primary),
+            ("png", true, false, egui::PointerButton::Secondary),
+        ] {
+            let ctx = egui::Context::default();
+            design::configure(&ctx);
+            let options = Options::parse_from(["studio"]);
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut session = Session::new(&cc, &options);
+            session.assets = Some(Assets::empty());
+            let mut project = Project::new("Drag fixture".into(), 320, 180, "30".parse()?)?;
+            let project_id = project.id;
+            let media_id = Uuid::new_v4();
+            project.media.push(Media {
+                id: media_id,
+                path: format!("source.{codec}").into(),
+                alias: None,
+                metadata: Metadata {
+                    size_bytes: 1,
+                    blake3: Some("a".repeat(64)),
+                    video: (codec != "audio").then(|| Video {
+                        codec: codec.into(),
+                        width: 320,
+                        height: 180,
+                        frame_rate: project.frame_rate,
+                        frames: if codec == "png" { 1 } else { 90 },
+                        start_time_micros: 0,
+                        sample_aspect_ratio: "1:1".into(),
+                        color_transfer: None,
+                        constant_rate: true,
+                    }),
+                    audio: (codec == "audio").then(|| Audio {
+                        codec: "pcm_s16le".into(),
+                        sample_rate: 48_000,
+                        channels: 2,
+                        start_time_micros: 0,
+                        canonical_samples_48k: Some(48_000),
+                    }),
+                },
+            });
+            session.project = Some(project);
+            session.connected = connected;
+            session.edit_busy = busy;
+            let mut pass = |time, events| {
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(260.0, 640.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| session.media_panel(ui),
+                )
+            };
+            let mut output = pass(0.0, vec![]);
+            let caption = match codec {
+                "png" => "Image",
+                "audio" => "Audio",
+                _ => "Video",
+            };
+            let center = output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.job.text == caption
+                    {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    } else {
+                        None
+                    }
+                })
+                .expect("real media card painted its stream caption");
+            output.textures_delta.clear();
+            let mut output = pass(
+                0.02,
+                vec![
+                    egui::Event::PointerMoved(center),
+                    egui::Event::PointerButton {
+                        pos: center,
+                        button,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            output.textures_delta.clear();
+            let mut output = pass(
+                0.04,
+                vec![egui::Event::PointerMoved(center + Vec2::new(30.0, 0.0))],
+            );
+            output.textures_delta.clear();
+            let payload = egui::DragAndDrop::payload::<timeline::DragPayload>(&ctx);
+            assert!(session.send(Command::Shutdown));
+            if let Some(preview) = &session.preview {
+                preview.shutdown();
+            }
+            if connected && !busy && button == egui::PointerButton::Primary {
+                let payload = payload.expect("actual verified media card starts a primary drag");
+                assert_eq!(payload.project, project_id);
+                assert_eq!(payload.revision, 0);
+                assert_eq!(payload.epoch, session.epoch);
+                assert!(
+                    matches!(payload.source, timeline::DragSource::Media(id) if id == media_id)
+                );
+            } else {
+                assert!(
+                    payload.is_none(),
+                    "{codec}: connected={connected} busy={busy} button={button:?}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

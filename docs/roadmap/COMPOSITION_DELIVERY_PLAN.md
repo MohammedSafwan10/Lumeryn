@@ -1,6 +1,6 @@
 # Composition delivery plan
 
-Date: 2026-10-10. Owner authorizes planning and implementation of layers/gaps/images/transforms, editable text/vectors/animation/templates, colour/effects/fades, and transitions/speed/freeze. Status: researched plan and external feasibility fixture; **production capabilities remain unimplemented**. This extends the current editor, not a restart. [TASKS](../../TASKS.md) tracks execution; [ADR0023](../adr/0023-shared-visual-composition.md) records architecture.
+Date: 2026-10-10. Owner authorizes planning and implementation of layers/gaps/images/transforms, editable text/vectors/animation/templates, colour/effects/fades, and transitions/speed/freeze. Status: V0 and bounded V1 implemented; integrated acceptance in progress. V2�V7 remain staged. This extends the current editor, not a restart. [TASKS](../../TASKS.md) tracks execution; [ADR0023](../adr/0023-shared-visual-composition.md) records architecture.
 
 ## Product outcome and boundaries
 
@@ -33,7 +33,7 @@ V0 is an offgraph engineering gate with no new editing capability. Each subseque
 
 | Stage | Concrete delivery | Exit evidence |
 |---|---|---|
-| V0 — checked frame plan | Pure VisualPlan/time/source/order evaluation and generated reference lowering against offgraph fixtures. No new persisted edits yet. | Known gap/alpha/crop/order frames; exact rational mapping; rejected malformed/unsupported plans; bounded active decoders and headless operation. External spike is done; this Rust integration is next. |
+| V0 — checked frame plan | Pure VisualPlan/time/source/order evaluation and generated reference lowering against offgraph fixtures. No new persisted edits yet. | Known gap/alpha/crop/order frames; exact rational mapping; rejected malformed/unsupported plans; bounded active decoders and headless operation. Rust reference integrated; executed gates recorded in COMPOSITION_ACCEPTANCE. |
 | V1 — layers and stills | Explicit schema3 migration, two moving visual layers plus a PNG hold within measured limits, free placement/gaps, named ordered tracks. CLI inspect/add/move/range/reorder and native drag/drop. | Schema1/2 migration/rollback/history/receipts, old-reader rejection, source immutability, two clients, live updates, genuine layered preview and UHD/portrait export with independent audio. |
 | V2 — direct composition | Contain/cover, source crop, position/size/pivot, flip, quarter-turns, tested arbitrary rotation and Normal opacity. Native bounds/handles with precise Inspector alternatives. | No alpha fringes, correct crop/rotation corners, output-space scaling and portrait safe areas; pointer/keyboard/DPI/cancel/conflict tests and matching headless/export frames. |
 | V3 — editable titles | Select one measured layout/raster stack. Text, rectangle/ellipse/connector nodes, pinned fonts and wrapping; editable lower-third/title overlays. | Fixed-font cluster/bidi/fallback fixtures, missing-font failures, no DPI-dependent wrapping, transparent glyph edges, save/reopen/edit and full composition UHD output. |
@@ -54,7 +54,7 @@ Drag uses grabbed offsets, visible target rows, snapping to nearby endpoints/pla
 
 ## CLI and service parity
 
-Proposed operation groups are **design contracts, not available commands**: visual tracks, visual placement/ranges/transforms, scene/node edits, keyframes, template expansion, effects/fades, transitions, speed/freeze, render frame/contact-sheet and composition preflight. Final names follow the existing schema/CLI conventions.
+Visual tracks, video/PNG placement, range, contain rectangles and free primary movement are available through `timeline visual` / `timeline clip move`. Scene/node edits, full transforms, keyframes, template expansion, effects/fades, transitions, speed/freeze and frame/contact-sheet inspection remain design contracts. Final names follow the existing schema/CLI conventions.
 
 Every shipped group includes strict JSON schemas, capability ID/status/limits/prerequisites, inspect results, examples, expected revision, idempotency, atomic dry-run/batch, undo/redo and service notifications. Discovery distinguishes stored graph limits from admitted render limits and reports unsupported combinations. No Studio-only action or semantic-only CLI success while export omits it.
 
@@ -82,3 +82,13 @@ Record cold/warm startup, seek-to-present p50/p95, sustained playback/drop/under
 Research specialists completed separate reports; root owns this plan/ADR/UI contract. For implementation assign one graph/storage owner, one shared evaluation/backend owner, and one client/verification owner after contracts merge. Avoid parallel edits of model.rs, storage.rs, render.rs or AudioPlan. Typography/effect experiments can own isolated modules/tests and report back; no speculative crate extraction.
 
 Next: implement V0 checked offgraph VisualPlan and source-time/active-interval tests, prove the shared reference in preview-frame and export adapters, then deliver V1 on disposable projects. Do not increment schema or advertise layered editing before that gate. The current owner project and running Studio remain untouched by planning/fixtures.
+
+## V1 scope adjustment and next executable milestone
+
+Ship the checked reference and explicit migration together with three total admitted visual placements (primary plus overlays), two extra tracks, maximum two active videos/one PNG and bounded UHD surfaces. CLI discovery exposes these limits and the64-clip unchanged sequential fast path separately. This delivers real layers/gaps/PIP/stills without prematurely building a decoder-window scheduler. Independent audio, revision conflicts, source proofs and history remain shared. No new mandatory library/backend is introduced.
+
+V1 includes precise contain position/size and a corner PIP preset earlier than V2. Crop, cover, rotate/flip, explicit opacity and direct canvas handles remain V2. The native Inspector uses readable time values with exact frames available secondarily. Native draft-composite preview and larger source counts remain pending. Finish V2 with small source-bound fixtures and the same preview/export lowering, then prioritize V3 measured creative typography and V4 editable explainers. Do not expose decorative controls for the remaining families.
+
+## Owner launch feedback checkpoint
+
+Before further creative features, fix the confirmed Windows launch defects: GUI subsystem in debug/release, agent-safe no-handle-inheritance Studio spawning with OS visibility observations, and console-free media workers across preview/import/render. These share existing process/service boundaries; no embedded runtime/installer/second graph is introduced. Existing zero-project Welcome/Open/New remains. Owner projects and unfinished UI edits must survive rollout; an older running GUI/service only receives the correction after an owner-controlled refresh. Passing framebuffer captures alone cannot certify a foreground physical display.

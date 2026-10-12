@@ -1,8 +1,492 @@
 {
   "$defs": {
+    "Clipboard": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_frames": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "frame_rate": {
+          "$ref": "#/$defs/FrameRate"
+        },
+        "media_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "project_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "source_blake3": {
+          "type": "string"
+        },
+        "source_in_frame": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "project_id",
+        "media_id",
+        "source_blake3",
+        "frame_rate",
+        "source_in_frame",
+        "duration_frames"
+      ],
+      "type": "object"
+    },
     "Edit": {
       "description": "Commands contain no executable text. IDs may be supplied for batch references.",
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "operation": {
+              "const": "add_visual_track",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "id",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "before_track_id": {
+              "format": "uuid",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "operation": {
+              "const": "reorder_visual_track",
+              "type": "string"
+            },
+            "track_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "track_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "delete_visual_track",
+              "type": "string"
+            },
+            "track_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "track_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "duration_frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "media_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "add_visual_clip",
+              "type": "string"
+            },
+            "placement": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VisualPlacement"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "$ref": "#/$defs/VisualSource"
+            },
+            "track_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "id",
+            "media_id",
+            "track_id",
+            "at_frame",
+            "duration_frames",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "move_visual_clip",
+              "type": "string"
+            },
+            "track_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "track_id",
+            "at_frame"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "duration_frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "set_visual_range",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/VisualSource"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "at_frame",
+            "duration_frames",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "set_visual_placement",
+              "type": "string"
+            },
+            "placement": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VisualPlacement"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "placement"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "delete_visual_clip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Free primary-track placement; this never ripples or closes gaps.",
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "move_clip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "at_frame"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "duration_frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "gain_millidecibels": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "media_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "muted": {
+              "type": "boolean"
+            },
+            "operation": {
+              "const": "add_audio_clip",
+              "type": "string"
+            },
+            "source_in_sample": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "operation",
+            "id",
+            "media_id",
+            "at_frame",
+            "source_in_sample",
+            "duration_frames",
+            "gain_millidecibels",
+            "muted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "move_audio_clip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "at_frame"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "duration_frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "trim_audio_clip",
+              "type": "string"
+            },
+            "source_in_sample": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "source_in_sample",
+            "duration_frames"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Update position and source range together, validating only their final combination.",
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "duration_frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "set_audio_range",
+              "type": "string"
+            },
+            "source_in_sample": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "at_frame",
+            "source_in_sample",
+            "duration_frames"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "gain_millidecibels": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "muted": {
+              "type": "boolean"
+            },
+            "operation": {
+              "const": "set_audio_properties",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "gain_millidecibels",
+            "muted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "delete_audio_clip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "properties": {
@@ -22,6 +506,51 @@
             "operation",
             "id",
             "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Set project-local display text; explicit null restores the filename-derived label.",
+          "properties": {
+            "alias": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "media_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "rename_media",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "media_id",
+            "alias"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Remove only an unused project reference, without deleting source or cache files.",
+          "properties": {
+            "media_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "remove_media",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "media_id"
           ],
           "type": "object"
         },
@@ -68,6 +597,49 @@
         },
         {
           "additionalProperties": false,
+          "description": "Insert before a clip, or append with None, and ripple the contiguous sequence.",
+          "properties": {
+            "before_clip_id": {
+              "format": "uuid",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "duration_frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "media_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "insert_clip",
+              "type": "string"
+            },
+            "source_in_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "operation",
+            "id",
+            "media_id",
+            "source_in_frame",
+            "duration_frames"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "properties": {
             "clip_id": {
               "format": "uuid",
@@ -93,6 +665,296 @@
             "clip_id",
             "source_in_frame",
             "duration_frames"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Split at an absolute interior timeline frame; the original ID remains on the left.",
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "split_clip",
+              "type": "string"
+            },
+            "right_clip_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "right_clip_id",
+            "at_frame"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Insert a copy immediately after its source and ripple the contiguous sequence.",
+          "properties": {
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "duplicate_clip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "delete_clip",
+              "type": "string"
+            },
+            "ripple": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move within a contiguous sequence. None appends; all clip source ranges are retained.",
+          "properties": {
+            "before_clip_id": {
+              "format": "uuid",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "clip_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "reorder_clip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "clip_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operation": {
+              "const": "set_canvas",
+              "type": "string"
+            },
+            "width": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "operation",
+            "width",
+            "height"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Choose an exact timeline rate before placing any video or audio clips.",
+          "properties": {
+            "frame_rate": {
+              "$ref": "#/$defs/FrameRate"
+            },
+            "operation": {
+              "const": "set_frame_rate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "frame_rate"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "clipboard": {
+              "$ref": "#/$defs/Clipboard"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "operation": {
+              "const": "paste_clip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "id",
+            "at_frame",
+            "clipboard"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Restore the preceding logical snapshot through the authoritative Store history.",
+          "properties": {
+            "operation": {
+              "const": "undo",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Restore the next logical snapshot through the authoritative Store history.",
+          "properties": {
+            "operation": {
+              "const": "redo",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FrameRate": {
+      "additionalProperties": false,
+      "description": "Exact project frame rate. Construction and deserialization validate bounds.",
+      "properties": {
+        "denominator": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "numerator": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "type": "object"
+    },
+    "VisualPlacement": {
+      "additionalProperties": false,
+      "description": "A contain-fit rectangle in project canvas pixels, independent of preview resolution.",
+      "properties": {
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "VisualSource": {
+      "description": "Source frames belong to moving video only; a still hold has no invented FPS.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "video",
+              "type": "string"
+            },
+            "source_in_frame": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "source_in_frame"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
           ],
           "type": "object"
         }

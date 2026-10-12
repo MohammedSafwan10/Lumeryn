@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 use tracing::Instrument;
 use uuid::Uuid;
+mod studio_launch;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -38,6 +39,9 @@ struct Cli {
 enum Command {
     /// Discover implemented and planned capabilities.
     Capabilities,
+    /// Launch native Studio and observe its Windows window; headless project open does not launch it.
+    #[command(subcommand)]
+    Studio(StudioCommand),
     /// Run the local authoritative project service (normally launched automatically).
     #[command(subcommand)]
     Service(ServiceCommand),
@@ -98,6 +102,19 @@ enum ServiceCommand {
     Run {
         #[arg(long)]
         project: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum StudioCommand {
+    Open {
+        #[arg(long)]
+        project: PathBuf,
+        /// Trusted built GUI executable; otherwise LUMERYN_STUDIO_PATH or CLI sibling.
+        #[arg(long)]
+        executable: Option<PathBuf>,
+        #[arg(long,default_value_t=20,value_parser=clap::value_parser!(u64).range(1..=60))]
+        wait_seconds: u64,
     },
 }
 
@@ -334,6 +351,9 @@ enum AssetCommand {
 
 #[derive(Debug, Subcommand)]
 enum TimelineCommand {
+    /// Ordered visual layers, explicit image holds and free placement.
+    #[command(subcommand)]
+    Visual(VisualCommand),
     /// Choose the exact timeline FPS before placing clips; accepts 60 or 60000/1001.
     Fps {
         #[command(flatten)]
@@ -363,6 +383,139 @@ enum TimelineCommand {
     },
     #[command(subcommand)]
     Clip(ClipCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum VisualCommand {
+    TrackAdd {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        id: Option<Uuid>,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    TrackDelete {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        track_id: Uuid,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    TrackReorder {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        track_id: Uuid,
+        #[arg(long)]
+        before_track_id: Option<Uuid>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Place verified moving video or a PNG hold; --image has no source FPS.
+    Add {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        id: Option<Uuid>,
+        #[arg(long)]
+        media_id: Uuid,
+        #[arg(long)]
+        track_id: Uuid,
+        #[arg(long, default_value_t = 0)]
+        at_frame: u64,
+        #[arg(long)]
+        duration_frames: u64,
+        #[arg(long, conflicts_with = "source_in_frame")]
+        image: bool,
+        #[arg(long)]
+        source_in_frame: Option<u64>,
+        #[command(flatten)]
+        placement: PlacementArgs,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Move {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        track_id: Uuid,
+        #[arg(long)]
+        at_frame: u64,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Range {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        at_frame: u64,
+        #[arg(long)]
+        duration_frames: u64,
+        #[arg(long, conflicts_with = "source_in_frame")]
+        image: bool,
+        #[arg(long)]
+        source_in_frame: Option<u64>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Replace the complete rectangle, or reset to full-canvas contain.
+    Placement {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[command(flatten)]
+        placement: PlacementArgs,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Delete {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+struct PlacementArgs {
+    #[arg(long, allow_negative_numbers = true)]
+    x: Option<i32>,
+    #[arg(long, allow_negative_numbers = true)]
+    y: Option<i32>,
+    #[arg(long)]
+    width: Option<u32>,
+    #[arg(long)]
+    height: Option<u32>,
+}
+impl PlacementArgs {
+    fn resolve(self) -> Result<Option<lumeryn_core::model::VisualPlacement>> {
+        match (self.x, self.y, self.width, self.height) {
+            (None, None, None, None) => Ok(None),
+            (Some(x), Some(y), Some(width), Some(height)) => {
+                Ok(Some(lumeryn_core::model::VisualPlacement {
+                    x,
+                    y,
+                    width,
+                    height,
+                }))
+            }
+            _ => Err(Error::Invalid(
+                "supply all of --x --y --width --height, or omit all for full-canvas contain"
+                    .into(),
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -436,6 +589,17 @@ enum AudioCommand {
 
 #[derive(Debug, Subcommand)]
 enum ClipCommand {
+    /// Move the primary clip without ripple, preserving explicit timeline gaps.
+    Move {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        at_frame: u64,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Insert source media at a clip boundary and ripple the contiguous sequence.
     Insert {
         #[command(flatten)]
@@ -710,22 +874,39 @@ async fn execute(cli: Cli) -> Result<Value> {
         }
         Command::Capabilities => Ok(json!({
             "api_version":1,"project_schema_version":lumeryn_core::model::SCHEMA_VERSION,"output":"json",
-            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","media.import_start","media.import_status","media.list","media.inspect","media.rename","media.remove","assets.list","assets.search","assets.inspect","assets.check","timeline.inspect","timeline.fps","timeline.canvas","timeline.clip.add","timeline.clip.insert","timeline.audio.add","timeline.audio.move","timeline.audio.trim","timeline.audio.range","timeline.audio.properties","timeline.audio.delete","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
+            "implemented":["project.create","project.open","project.inspect","project.history","project.history_status","project.undo","project.redo","project.batch","project.check","project.migrate","project.backup","project.search.metadata_fts5","project.watch","jobs.cancel","service.authoritative_windows_ipc","media.probe","media.import","media.import_start","media.import_status","media.list","media.inspect","media.rename","media.remove","assets.list","assets.search","assets.inspect","assets.check","studio.open","timeline.inspect","timeline.fps","timeline.canvas","timeline.clip.add","timeline.clip.move","timeline.visual.track_add","timeline.visual.track_delete","timeline.visual.track_reorder","timeline.visual.add","timeline.visual.move","timeline.visual.range","timeline.visual.placement","timeline.visual.delete","timeline.clip.insert","timeline.audio.add","timeline.audio.move","timeline.audio.trim","timeline.audio.range","timeline.audio.properties","timeline.audio.delete","timeline.clip.trim","timeline.clip.split","timeline.clip.duplicate","timeline.clip.delete","timeline.clip.reorder","timeline.clip.copy","timeline.clip.paste","render.baseline_mpeg4_aac","render.local_uhd_presets","render.h264_h265_installed_encoders","render.auto_encoder_probe_cpu_fallback","hardware.scan.basic","schema","doctor"],
             "timeline_frame_rate":{"command":"timeline fps --project <path> --fps <numerator/denominator> --expected-revision <revision>","representation":"exact rational; no rounding of 30000/1001 or 60000/1001","change_policy":"different rate only while no video or audio clips are placed","source_rate":"media metadata.video.frame_rate detected and verified independently","export_rate":"render --fps override or preserve timeline rate","mixed_source_rates":"unsupported"},
             "media_management":{"alias":"project-only; null resets source filename display","alias_maximum_utf8_bytes":256,"remove":"unused project references only; rejects referenced media; source bytes unchanged","undo_redo":true,"dry_run":true},
             "history":{"undo_redo":"new monotonic revisions; logical history restored transactionally","undo_redo_batch":"sole operation only","branch_edit_clears_redo":true},
             "clipboard":{"version":1,"maximum_payload_bytes":16384,"scope":"same project and already-imported BLAKE3 source identity","payload":"result.clipboard object","cross_project_transfer":"staged","paste":"authoritative typed PasteClip with new stable ID and exact source ranges"},
             "requires_external_tools":["media.probe","media.import","media.import_start","render"],
-            "export_limits":{"track":"one video track","layout":"1..64 contiguous nonoverlapping clips starting at frame 0","source":"matching CFR; frame timestamps verified","audio":"embedded audio plus independent mono/stereo zero-origin sources; canonical stereo 48000Hz; max64 contributions","color":"baseline SDR; no managed HDR"},
+            "export_limits":{"sequential_fast_path":"1..64 contiguous primary video clips starting at frame 0","composition":{"maximum_total_visual_placements":3,"maximum_additional_tracks":2,"maximum_active_video_sources":2,"maximum_active_png_sources":1,"source":"matching verified CFR video or single-frame verified PNG","gaps":"opaque black background; upper gaps reveal lower layers","placement":"aspect-preserving contain rectangle; intrinsic straight PNG alpha","maximum_source_and_intermediate_dimension":3840,"reference_policy":"ffmpeg-encoded-sdr-rgba-v1","preview_seek":"decodes from origin; long seeks unoptimized","audio":"embedded moving-video audio mixes even when picture is occluded"},"source":"matching CFR; frame timestamps verified","audio":"embedded audio plus independent mono/stereo zero-origin sources; canonical stereo 48000Hz; max64 contributions","color":"baseline SDR; no managed HDR"},
             "export_options":{"resolution":["project","hd720","fhd1080","uhd2160"],"uhd_landscape":[3840,2160],"uhd_portrait":[2160,3840],"fps":[24,25,30,60],"preserve_project_fps":true,"codecs":["mpeg4","h264","h265"],"codec_availability":"installed encoder and actual requested-size initialization","quality":["draft","balanced","high"],"bitrate_kbps_range":[100,200000],"acceleration":["cpu","auto"],"watermark":false,"subscription_required":false,"preview_settings_affect_final":false,"eight_k_hdr_mastering":"staged"},
             "requirements":{"ordinary_editing":{"gpu_required":false,"cloud_required":false,"models_required":false,"database":"per-project SQLite3.51.3","schema_version":lumeryn_core::model::SCHEMA_VERSION,"storage_version":1},
                 "baseline_render":{"runtime":["trusted user-installed ffmpeg","trusted user-installed ffprobe"],"codec":"native mpeg4+aac; no hardware encoder selected","decoder_threads_per_input":2,"maximum_clips":64,"measured_peak_ram_bytes":null,"vram_bytes":null,"cpu_fallback":"the implemented baseline"}},
             "capability_status":{"studio":"native_baseline_prototype","preview":"cpu_decode_gpu_upload_prototype","gpu_encode_decode":"auto_encoding_probe_available_decode_not_integrated","native_text":"planned","device_audio":"cpal_prototype_physical_sync_unmeasured","semantic_vectors":"not_selected","application_database":"planned","fts5":"implemented_metadata_only","cache":"source_content_hashes_only","live_events":"implemented_bounded_replay_snapshot_resync"},
-            "components":{"project_service":{"platform":"Windows","transport":"current-user ACL named pipe; remote clients rejected","supported_here":cfg!(windows),"cloud_required":false},"studio":{"executable":"lumeryn-studio","separate_install":true,"stack":"egui/eframe/egui_dock/egui-wgpu/wgpu","preview_gpu_required":true,"hardware_zero_copy":false,"physical_av_sync_verified":false}},
+            "components":{"project_service":{"platform":"Windows","transport":"current-user ACL named pipe; remote clients rejected","supported_here":cfg!(windows),"cloud_required":false},"studio":{"executable":"lumeryn-studio","launch_command":"studio open --project <path> --executable <trusted built GUI path>","launch_executable_env":"LUMERYN_STUDIO_PATH","launch_success":"matching-process visible non-minimized on-screen uncloaked Windows window observed; user attention/physical pixels unknown","headless_project_open_launches_gui":false,"separate_install":true,"stack":"egui/eframe/egui_dock/egui-wgpu/wgpu","preview_gpu_required":true,"hardware_zero_copy":false,"physical_av_sync_verified":false}},
             "import_options":{"background_start":"media import-start","status":"media import-status","match_first_video":"opt-in; verified CFR only; no existing moving-video media or placed clips","pending_media_editable":false,"expected_revision_required":true,"cancel_command":"jobs cancel","synchronous_import_preserved":true},
             "job_control":{"render_accepts_job_id":true,"client_disconnect_cancels_render":false,"cancel_command":"jobs cancel --project <path> --job-id <uuid>","render_concurrency":1,"render_queue_limit":16},
             "planned":["gpu_compositor","hardware_decode_integration","resource_scheduler","models","blender","effects","audio_detach_fades_multitrack","transcript_fts5","native_typography","professional_audio_mixing","proxies","incremental_render_cache","vector_index"]
         })),
+        Command::Studio(StudioCommand::Open {
+            project,
+            executable,
+            wait_seconds,
+        }) => {
+            let inspected: Project =
+                serde_json::from_value(project_call(project.clone(), Request::Inspect).await?)?;
+            let mut result = studio_launch::open(
+                &project,
+                executable.as_deref(),
+                Duration::from_secs(wait_seconds),
+            )
+            .await?;
+            result["headless_inspected_revision"] = json!(inspected.revision);
+            result["project_loaded_in_studio"] = json!("not_observed_by_launcher");
+            Ok(result)
+        }
         Command::Service(ServiceCommand::Run { project }) => {
             lumeryn_service::serve(project).await?;
             Ok(json!({"service":"stopped"}))
@@ -842,6 +1023,7 @@ async fn execute(cli: Cli) -> Result<Value> {
                     .iter()
                     .map(|clip| clip.media_id)
                     .chain(snapshot.audio_clips.iter().map(|clip| clip.media_id))
+                    .chain(snapshot.visual_clips.iter().map(|clip| clip.media_id))
                     .fold(
                         std::collections::HashMap::<_, usize>::new(),
                         |mut usage, media_id| {
@@ -870,6 +1052,11 @@ async fn execute(cli: Cli) -> Result<Value> {
                     .count()
                     + snapshot
                         .audio_clips
+                        .iter()
+                        .filter(|clip| clip.media_id == media_id)
+                        .count()
+                    + snapshot
+                        .visual_clips
                         .iter()
                         .filter(|clip| clip.media_id == media_id)
                         .count();
@@ -963,6 +1150,157 @@ async fn execute(cli: Cli) -> Result<Value> {
             }
         },
         Command::Timeline(command) => match command {
+            TimelineCommand::Visual(command) => {
+                use lumeryn_core::model::VisualSource;
+                let (write, operation, dry_run) = match command {
+                    VisualCommand::TrackAdd {
+                        write,
+                        id,
+                        name,
+                        dry_run,
+                    } => {
+                        let id = operation_id(id, &write)?;
+                        (write, Edit::AddVisualTrack { id, name }, dry_run)
+                    }
+                    VisualCommand::TrackDelete {
+                        write,
+                        track_id,
+                        dry_run,
+                    } => (write, Edit::DeleteVisualTrack { track_id }, dry_run),
+                    VisualCommand::TrackReorder {
+                        write,
+                        track_id,
+                        before_track_id,
+                        dry_run,
+                    } => (
+                        write,
+                        Edit::ReorderVisualTrack {
+                            track_id,
+                            before_track_id,
+                        },
+                        dry_run,
+                    ),
+                    VisualCommand::Add {
+                        write,
+                        id,
+                        media_id,
+                        track_id,
+                        at_frame,
+                        duration_frames,
+                        image,
+                        source_in_frame,
+                        placement,
+                        dry_run,
+                    } => {
+                        let id = operation_id(id, &write)?;
+                        let source = if image {
+                            VisualSource::Image {}
+                        } else {
+                            VisualSource::Video {
+                                source_in_frame: source_in_frame.unwrap_or(0),
+                            }
+                        };
+                        (
+                            write,
+                            Edit::AddVisualClip {
+                                id,
+                                media_id,
+                                track_id,
+                                at_frame,
+                                duration_frames,
+                                source,
+                                placement: placement.resolve()?,
+                            },
+                            dry_run,
+                        )
+                    }
+                    VisualCommand::Move {
+                        write,
+                        clip_id,
+                        track_id,
+                        at_frame,
+                        dry_run,
+                    } => (
+                        write,
+                        Edit::MoveVisualClip {
+                            clip_id,
+                            track_id,
+                            at_frame,
+                        },
+                        dry_run,
+                    ),
+                    VisualCommand::Range {
+                        write,
+                        clip_id,
+                        at_frame,
+                        duration_frames,
+                        image,
+                        source_in_frame,
+                        dry_run,
+                    } => {
+                        let source = if image {
+                            VisualSource::Image {}
+                        } else {
+                            VisualSource::Video {
+                                source_in_frame: source_in_frame.unwrap_or(0),
+                            }
+                        };
+                        (
+                            write,
+                            Edit::SetVisualRange {
+                                clip_id,
+                                at_frame,
+                                duration_frames,
+                                source,
+                            },
+                            dry_run,
+                        )
+                    }
+                    VisualCommand::Placement {
+                        write,
+                        clip_id,
+                        placement,
+                        dry_run,
+                    } => (
+                        write,
+                        Edit::SetVisualPlacement {
+                            clip_id,
+                            placement: placement.resolve()?,
+                        },
+                        dry_run,
+                    ),
+                    VisualCommand::Delete {
+                        write,
+                        clip_id,
+                        dry_run,
+                    } => (write, Edit::DeleteVisualClip { clip_id }, dry_run),
+                };
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![operation],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
+            TimelineCommand::Clip(ClipCommand::Move {
+                write,
+                clip_id,
+                at_frame,
+                dry_run,
+            }) => {
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![Edit::MoveClip { clip_id, at_frame }],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
             TimelineCommand::Fps {
                 write,
                 fps,
@@ -1201,7 +1539,7 @@ async fn execute(cli: Cli) -> Result<Value> {
             TimelineCommand::Inspect { project } => {
                 let project = Client::connect(project).await?.inspect().await?;
                 Ok(
-                    json!({"revision":project.revision,"frame_rate":project.frame_rate,"timeline_frame_rate":project.frame_rate,"frame_rate_locked":!project.clips.is_empty() || !project.audio_clips.is_empty(),"video_track_id":project.video_track_id,"clips":project.clips,"audio_track_id":project.audio_track_id,"audio_clips":project.audio_clips}),
+                    json!({"revision":project.revision,"frame_rate":project.frame_rate,"timeline_frame_rate":project.frame_rate,"frame_rate_locked":project.visual_duration_frames() > 0 || !project.audio_clips.is_empty(),"video_track_id":project.video_track_id,"clips":project.clips,"visual_tracks":project.visual_tracks,"visual_clips":project.visual_clips,"audio_track_id":project.audio_track_id,"audio_clips":project.audio_clips}),
                 )
             }
             TimelineCommand::Clip(ClipCommand::Insert {

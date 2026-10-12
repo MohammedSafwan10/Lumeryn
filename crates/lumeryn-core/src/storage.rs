@@ -132,6 +132,44 @@ pub struct PreparedImports {
     commands: String,
     imports: Vec<Option<Media>>,
     audio_proofs: Vec<Option<AudioProof>>,
+    visual_proofs: Vec<Option<VisualProof>>,
+}
+
+#[derive(Clone)]
+struct VisualProof {
+    media_id: Uuid,
+    path: PathBuf,
+    digest: String,
+    size_bytes: u64,
+    modified: std::time::SystemTime,
+}
+
+impl VisualProof {
+    fn check(&self, project: &Project, database: &Path) -> Result<()> {
+        let media = project
+            .media
+            .iter()
+            .find(|media| media.id == self.media_id)
+            .ok_or_else(|| Error::NotFound(format!("media {}", self.media_id)))?;
+        if media.path != self.path
+            || media.metadata.size_bytes != self.size_bytes
+            || media.metadata.blake3.as_deref() != Some(self.digest.as_str())
+        {
+            return Err(Error::Invalid(
+                "visual proof source identity changed before commit".into(),
+            ));
+        }
+        let parent = database
+            .parent()
+            .ok_or_else(|| Error::Invalid("missing project parent".into()))?;
+        let source = std::fs::metadata(parent.join(&media.path))?;
+        if source.len() != self.size_bytes || source.modified()? != self.modified {
+            return Err(Error::Invalid(
+                "visual source identity changed before commit; reimport media".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -380,6 +418,7 @@ impl Store {
         let PreparedImports {
             imports,
             audio_proofs,
+            visual_proofs,
             ..
         } = prepared;
         if self.storage_version().await? != STORAGE_VERSION {
@@ -464,11 +503,18 @@ impl Store {
             project = restored;
             object_ids.push(project.id);
         } else {
-            for ((operation, imported), proof) in
-                batch.operations.iter().zip(imports).zip(audio_proofs)
+            for (((operation, imported), proof), visual_proof) in batch
+                .operations
+                .iter()
+                .zip(imports)
+                .zip(audio_proofs)
+                .zip(visual_proofs)
             {
                 if let Some(proof) = proof {
                     proof.apply(&mut project)?;
+                }
+                if let Some(proof) = visual_proof {
+                    proof.check(&project, &self.path)?;
                 }
                 project.apply(operation, imported)?;
                 match operation {
@@ -476,9 +522,12 @@ impl Store {
                     | Edit::AddClip { id, .. }
                     | Edit::InsertClip { id, .. }
                     | Edit::AddAudioClip { id, .. }
+                    | Edit::AddVisualTrack { id, .. }
+                    | Edit::AddVisualClip { id, .. }
                     | Edit::PasteClip { id, .. }
                     | Edit::DuplicateClip { id, .. } => object_ids.push(*id),
                     Edit::TrimClip { clip_id, .. }
+                    | Edit::MoveClip { clip_id, .. }
                     | Edit::DeleteClip { clip_id, .. }
                     | Edit::ReorderClip { clip_id, .. } => object_ids.push(*clip_id),
                     Edit::MoveAudioClip { clip_id, .. }
@@ -486,6 +535,12 @@ impl Store {
                     | Edit::SetAudioRange { clip_id, .. }
                     | Edit::SetAudioProperties { clip_id, .. }
                     | Edit::DeleteAudioClip { clip_id } => object_ids.push(*clip_id),
+                    Edit::MoveVisualClip { clip_id, .. }
+                    | Edit::SetVisualRange { clip_id, .. }
+                    | Edit::SetVisualPlacement { clip_id, .. }
+                    | Edit::DeleteVisualClip { clip_id } => object_ids.push(*clip_id),
+                    Edit::ReorderVisualTrack { track_id, .. }
+                    | Edit::DeleteVisualTrack { track_id } => object_ids.push(*track_id),
                     Edit::RenameMedia { media_id, .. } | Edit::RemoveMedia { media_id } => {
                         object_ids.push(*media_id)
                     }
@@ -605,7 +660,7 @@ impl Store {
                 serde_json::json!({"from":locked,"to":locked,"graph_from":graph_from,"graph_to":graph_from,"changed":false}),
             );
         }
-        if graph_from == 1 {
+        if graph_from < SCHEMA_VERSION {
             // Bound memory before collecting all histories needed for collision-free identity.
             let sizes = sqlx::query("SELECT count(*) AS records, coalesce(sum(length(CAST(snapshot AS BLOB))),0) AS bytes, coalesce(sum(length(CAST(commands AS BLOB))),0) AS command_bytes FROM history").fetch_one(&mut *tx).await?;
             if sizes.try_get::<i64, _>("records")? > MAX_HISTORY_RECORDS as i64
@@ -633,7 +688,7 @@ impl Store {
                     index as u64,
                     project.id,
                 )?;
-                if snapshot.schema_version != 1 {
+                if snapshot.schema_version != graph_from {
                     return Err(Error::Invalid(
                         "migration history has mixed graph schemas".into(),
                     ));
@@ -657,6 +712,8 @@ impl Store {
                 ids.extend([snapshot.id, snapshot.video_track_id]);
                 ids.extend(snapshot.media.iter().map(|media| media.id));
                 ids.extend(snapshot.clips.iter().map(|clip| clip.id));
+                ids.extend(snapshot.audio_track_id);
+                ids.extend(snapshot.audio_clips.iter().map(|clip| clip.id));
                 previous.push(snapshot);
             }
             if previous.last().map(serde_json::to_value).transpose()?
@@ -666,15 +723,31 @@ impl Store {
                     "migration current snapshot disagrees with history".into(),
                 ));
             }
-            let audio_track = (0..100)
-                .map(|_| Uuid::new_v4())
-                .find(|id| !ids.contains(id))
-                .ok_or_else(|| {
-                    Error::Invalid("cannot allocate unique audio track identity".into())
-                })?;
+            let audio_track = if graph_from == 1 {
+                (0..100)
+                    .map(|_| Uuid::new_v4())
+                    .find(|id| !ids.contains(id))
+                    .ok_or_else(|| {
+                        Error::Invalid("cannot allocate unique audio track identity".into())
+                    })?
+            } else {
+                project.audio_track_id.ok_or_else(|| {
+                    Error::Invalid("schema 2 requires audio track identity".into())
+                })?
+            };
             for snapshot in &mut previous {
+                if graph_from == 2 && snapshot.audio_track_id != Some(audio_track) {
+                    return Err(Error::Invalid(
+                        "migration history audio track identity differs".into(),
+                    ));
+                }
+                // Compose 1 -> 2 -> 3 without changing durable commands, receipts or revisions.
+                if snapshot.schema_version == 1 {
+                    snapshot.schema_version = 2;
+                    snapshot.audio_track_id = Some(audio_track);
+                    snapshot.validate()?;
+                }
                 snapshot.schema_version = SCHEMA_VERSION;
-                snapshot.audio_track_id = Some(audio_track);
                 snapshot.validate()?;
                 sqlx::query("UPDATE history SET snapshot=? WHERE revision=?")
                     .bind(serde_json::to_string(snapshot)?)
@@ -1124,6 +1197,7 @@ pub async fn prepare_verified_imports(
         project_path,
         commands,
         audio_proofs: vec![None; imports.len()],
+        visual_proofs: vec![None; imports.len()],
         imports,
     })
 }
@@ -1164,11 +1238,16 @@ pub async fn prepare_imports(
 
     let mut audio_proofs = Vec::with_capacity(batch.operations.len());
     let mut proofs = HashMap::<Uuid, AudioProof>::new();
-    let current = if batch
-        .operations
-        .iter()
-        .any(|operation| matches!(operation, Edit::AddAudioClip { .. }))
-    {
+    let current = if batch.operations.iter().any(|operation| {
+        matches!(
+            operation,
+            Edit::AddAudioClip { .. }
+                | Edit::AddVisualClip { .. }
+                | Edit::SetVisualRange { .. }
+                | Edit::SetVisualPlacement { .. }
+                | Edit::MoveVisualClip { .. }
+        )
+    }) {
         Some(Store::open(&project_path).await?.inspect().await?)
     } else {
         None
@@ -1224,11 +1303,91 @@ pub async fn prepare_imports(
         };
         audio_proofs.push(proof);
     }
+    let mut visual_proofs = Vec::with_capacity(batch.operations.len());
+    let mut visual_sources = HashMap::<Uuid, VisualProof>::new();
+    for operation in &batch.operations {
+        let media_id = match operation {
+            Edit::AddVisualClip { media_id, .. } => Some(*media_id),
+            Edit::SetVisualRange { clip_id, .. }
+            | Edit::SetVisualPlacement { clip_id, .. }
+            | Edit::MoveVisualClip { clip_id, .. } => batch
+                .operations
+                .iter()
+                .find_map(|operation| match operation {
+                    Edit::AddVisualClip { id, media_id, .. } if id == clip_id => Some(*media_id),
+                    _ => None,
+                })
+                .or_else(|| {
+                    current.as_ref().and_then(|project| {
+                        project
+                            .visual_clips
+                            .iter()
+                            .find(|clip| clip.id == *clip_id)
+                            .map(|clip| clip.media_id)
+                    })
+                })
+                .ok_or_else(|| Error::NotFound(format!("visual clip {clip_id}")))?
+                .into(),
+            _ => None,
+        };
+        let proof = if let Some(media_id) = media_id {
+            if let Some(proof) = visual_sources.get(&media_id) {
+                Some(proof.clone())
+            } else {
+                let media = imports
+                    .iter()
+                    .flatten()
+                    .find(|media| media.id == media_id)
+                    .or_else(|| {
+                        current.as_ref().and_then(|project| {
+                            project.media.iter().find(|media| media.id == media_id)
+                        })
+                    })
+                    .ok_or_else(|| Error::NotFound(format!("media {media_id}")))?;
+                let digest = media.metadata.blake3.clone().ok_or_else(|| {
+                    Error::Invalid(
+                        "visual placement requires verified source digest; reimport media".into(),
+                    )
+                })?;
+                let parent = project_path
+                    .parent()
+                    .ok_or_else(|| Error::Invalid("missing project parent".into()))?;
+                let path = local_file(&parent.join(&media.path))?;
+                let before = std::fs::metadata(&path)?;
+                if before.len() != media.metadata.size_bytes
+                    || crate::media::content_hash(&path).await? != digest
+                {
+                    return Err(Error::Invalid(
+                        "visual source changed; reimport media".into(),
+                    ));
+                }
+                let after = std::fs::metadata(&path)?;
+                if before.len() != after.len() || before.modified()? != after.modified()? {
+                    return Err(Error::Invalid(
+                        "visual source changed while proving placement; reimport media".into(),
+                    ));
+                }
+                let proof = VisualProof {
+                    media_id,
+                    path: media.path.clone(),
+                    digest,
+                    size_bytes: media.metadata.size_bytes,
+                    modified: after.modified()?,
+                };
+                visual_sources.insert(media_id, proof.clone());
+                Some(proof)
+            }
+        } else {
+            None
+        };
+        visual_proofs.push(proof);
+    }
     Ok(PreparedImports {
         project_path,
         commands,
         imports,
         audio_proofs,
+        visual_proofs,
     })
 }
 

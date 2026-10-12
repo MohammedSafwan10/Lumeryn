@@ -4,6 +4,7 @@ use lumeryn_core::{
     audio_plan::AudioPlan,
     media::{content_hash, local_file},
     time::FrameRate,
+    visual_plan::{VisualPlan, requires_composition},
 };
 use std::{
     collections::HashSet,
@@ -29,11 +30,32 @@ pub(crate) struct Plan {
     pub width: u32,
     pub height: u32,
     pub audio_plan: Option<AudioPlan>,
+    pub visual_plan: Option<VisualPlan>,
 }
 
 impl Plan {
     pub async fn build(project: Project, database: &Path, config: PreviewConfig) -> Result<Self> {
         project.validate()?;
+        if requires_composition(&project) {
+            let visual_plan = VisualPlan::from_project(&project, database).await?;
+            let audio_plan = Some(AudioPlan::from_project(&project, database).await?);
+            let (width, height) = composition_preview_size(
+                project.width,
+                project.height,
+                config.max_width,
+                config.max_height,
+            );
+            return Ok(Self {
+                segments: Vec::new(),
+                rate: project.frame_rate,
+                total: visual_plan.total_frames,
+                revision: project.revision,
+                width,
+                height,
+                audio_plan,
+                visual_plan: Some(visual_plan),
+            });
+        }
         let parent = database
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -126,6 +148,7 @@ impl Plan {
             width,
             height,
             audio_plan,
+            visual_plan: None,
         })
     }
 }
@@ -149,6 +172,15 @@ fn preview_size(width: u32, height: u32, max_width: u32, max_height: u32) -> (u3
     (w.max(2) & !1, h.max(2) & !1)
 }
 
+fn composition_preview_size(
+    width: u32,
+    height: u32,
+    max_width: u32,
+    max_height: u32,
+) -> (u32, u32) {
+    preview_size(width, height, max_width.min(3840), max_height.min(3840))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +189,9 @@ mod tests {
         assert_eq!(preview_size(3840, 2160, 1280, 720), (1280, 720));
         assert_eq!(preview_size(1080, 1920, 1280, 720), (404, 720));
         assert_eq!(preview_size(320, 180, 1280, 720), (320, 180));
+        assert_eq!(
+            composition_preview_size(7680, 4320, 4096, 4096),
+            (3840, 2160)
+        );
     }
 }

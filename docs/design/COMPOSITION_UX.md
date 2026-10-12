@@ -1,6 +1,6 @@
 # Native composition UI extension
 
-Date: 2026-10-10. Status: proposed interaction/state contract, not implemented screens or screenshot acceptance. Extend approved [B Studio](STUDIO_REDESIGN.md), existing two rails, mint accent and Inter; no new theme-selection loop. Follow [delivery stages](../roadmap/COMPOSITION_DELIVERY_PLAN.md).
+Date: 2026-10-10. Status: V1 named layers/video/PNG range/contain controls implemented; actual captures and tested states are recorded in COMPOSITION_ACCEPTANCE. V2–V7 remain interaction contracts. Extend approved [B Studio](STUDIO_REDESIGN.md), existing two rails, mint accent and Inter; no new theme-selection loop. Follow [delivery stages](../roadmap/COMPOSITION_DELIVERY_PLAN.md).
 
 ## Organisation
 
@@ -12,7 +12,7 @@ At1440x900 show both drawers when practical; at1280x800 narrow them; at980x640 s
 
 ## Screen and state checklist
 
-Every row is proposed. Mark implemented and visually verified only after actual native captures and interaction checks.
+V1 layer/media/hold interactions are implemented. Mark visual acceptance only from actual native captures; later rows remain proposed.
 
 | State | Main action and feedback | Stage |
 |---|---|---|
@@ -47,3 +47,5 @@ Snap to nearby playhead/clip endpoints with a documented pixel threshold and byp
 Starter pack: Clean title, Lower third, Callout, Chapter card and Picture-in-picture. Build original parameter recipes from editable nodes, existing audited fonts/art and actual renderer previews. Every style exposes inspectable values/version/provenance through CLI too. No proprietary Clipchamp stock/style artwork, premium/cloud badges, fake previews or inert controls.
 
 For each new screen capture actual populated/empty/loading/error/conflict/wide/compact states next to the approved reference and inspect spacing, hierarchy, clipping, focus and full-path leakage. Pointer, keyboard, IME, high-DPI, device loss and physical A/V remain separate checks. This document contains no raster mockups or shipping placeholders; future captures record actual working functionality.
+
+V1 uses timeline placement markers and genuine asset drag ghosts; the composed monitor updates on committed revisions. A new layer preserves primary/source/independent-audio drag and trim paths. Track labels have native context menus for moving up/down and deleting empty tracks; the authoritative service rejects populated track deletion. Time edits show readable elapsed values with exact frames in a collapsed secondary section. Position/size is a precise contain rectangle plus PIP preset; direct preview handles and uncommitted composite drafts are V2. V1 still has a three-placement admission cap, and the UI surfaces service errors instead of ignoring rejected items.

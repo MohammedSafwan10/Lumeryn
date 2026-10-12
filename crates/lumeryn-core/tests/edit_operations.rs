@@ -14,7 +14,11 @@ fn fixture() -> Result<Project> {
         alias: None,
         metadata: Metadata {
             size_bytes: 10,
-            blake3: None,
+            blake3: Some(
+                blake3::hash(b"immutable source fixture")
+                    .to_hex()
+                    .to_string(),
+            ),
             audio: None,
             video: Some(Video {
                 codec: "fixture".into(),

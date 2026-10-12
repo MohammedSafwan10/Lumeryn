@@ -1,20 +1,37 @@
 # Task board
 
-## Next composition milestone — researched plan, implementation pending
+## Media drawer responsiveness follow-up
+
+- [x] Replace one-button grid budget with both video actions, FPS details, font/interaction height and spacing; grid scrolls while actions remain visible.
+- [x] Inspect real980×640/1280×720 media captures, and test long-grid footer bounds at180/300/500pixel drawer heights.
+- [x] Correct reviewer-found PNG media-card drag exclusion; real media-panel pointer test verifies PNG/video/audio payloads and disconnected/busy/secondary rejection.
+- [x] Final225-distinct-test integrated gate and21-check real-window layer/UHD workflow passed; final native report/hashes and normal GUI rollout recorded before local verified commit.
+
+## Owner-reported launch and decoder consoles
+
+- [x] Diagnose separately GUI console subsystem, inherited agent EOF handles, and actual FFmpeg console ancestry on startup/+Layer.
+- [x] GUI debug/release, visible startup error/create-new bounded diagnostic, retain existing Welcome/Open/New.
+- [x] `studio open` with strict project/executable selection and owned OS window observation; parent-bounded EOF/exit tests and explicit unknown physical/project-rendered proof.
+- [x] Shared no-console media-worker factory across all four runtime constructors; actual no-console parent/child + preserved pipe test and focused decode/cancel/media regressions.
+- [x] Final locked225-distinct-test full gates, actual21-check native layer/UHD export, final compact capture and matching normal-build rollout without closing a running owner editor; local CLI installation verified.
+- [x] Owner explicitly confirmed no extra terminals on the refreshed editor; OS observations and actual no-console worker/agent EOF checks also passed.
+- [ ] Installer/signing/update management, physical multi-session/DPI/device/error-dialog checks and log rotation remain later distribution acceptance.
+
+## Composition delivery — V0/V1 verified; V2–V7 remaining
 
 Scope: owner-authorized layers/gaps/images/transforms; editable text/vectors/animation/templates; colour/effects/fades; transitions/speed/freeze. [Delivery plan](docs/roadmap/COMPOSITION_DELIVERY_PLAN.md), ADR0023 and [native state contract](docs/design/COMPOSITION_UX.md) are the execution contract.
 
 - [x] Three independently owned official-source research reports; concrete code/migration/colour/licensing/resource constraints reviewed.
 - [x] Generated external FFmpeg composition feasibility/baseline: timed crop/rotate/translucent PNG/gap, full decoded720p30/60frames, actual frames inspected. Not product implementation; docs/testing/COMPOSITION_SPIKE.md.
-- [ ] V0: checked offgraph Rust VisualPlan and one shared picture reference; exact rational time, active intervals, unsupported preflight and bounded output.
-- [ ] V1: explicit schema3 all-history migration and two moving layers/PNG holds/gaps with CLI/Studio/shared preview/export.
+- [x] V0: checked offgraph Rust VisualPlan and one shared picture reference; exact rational time, active intervals, unsupported preflight and bounded output.
+- [x] V1: explicit schema3 all-history migration, bounded video/PNG layers/gaps/contain rectangles through CLI/Studio/shared preview/export. Three TOTAL visual placements (primary plus overlays), two extra tracks, max two active videos/one PNG; larger scheduling remains V7.
 - [ ] V2: crop/fit/position/size/pivot/flip/rotation/opacity and native precise/direct manipulation.
 - [ ] V3: measured one-stack typography selection and editable static titles/shapes with pinned fonts.
 - [ ] V4: deterministic keyframes, five original editable presets and explainer components.
 - [ ] V5: versioned SDR colour/original looks, visual/audio fades and reset.
 - [ ] V6: verified-handle transitions, rational speed/explicit pitch/ripple and exact-source freeze.
 - [ ] V7: GPU/cache/proxy expansion only after pixel conformance and total-cost benchmarks.
-- [ ] Every slice: schema/capabilities/dry-run/events/history, actual UHD/portrait24/25/30/60, visual/audio/source checks and physical native/device/DPI acceptance. No unsupported decorative controls.
+- [ ] Every slice: schema/capabilities/dry-run/events/history, actual UHD/portrait24/25/30/60, visual/audio/source checks and physical native/device/DPI acceptance. Full locked225-distinct-test gate passed, actual layered UHD export and scripted native handlers passed; physical pointer/DPI/device/A/V remain unexecuted. No unsupported decorative controls.
 
 ## Owner-requested PC FFmpeg update — complete
 
@@ -46,7 +63,7 @@ The owner has authorized implementation of all eighteen references. Deliver and 
 |---|---|---|---|---|
 | CC-00 | P0 / none | Lead + UI/engine/licensing specialists | 18-image audit, official research, current gaps and library rights | DONE; inventory/three specialist reports/ADR0014; documentation only |
 | CC-01 | P0 /00 | UI / native shell | Two rails + drawers over supported controls; compact/fullscreen/focus and baseline native gates | IMPLEMENTED; native rails, compact drawers, actual OS fullscreen and baseline captures; final integrated evidence in CLIPCHAMP_FOUNDATION |
-| CC-02 | P0 /00 | Core/service/CLI + UI | Shared baseline evaluator and atomic split/duplicate/delete/move/reorder/ripple; dry-run/conflict/source/output tests | PARTIAL; split/duplicate/ripple-delete/reorder implemented through core/service/CLI/Studio; 5 Store tests. Native media-card insertion and video/linked-audio body reordering now use boundary snapping, inert feedback, cancellation/stale guards and edge scrolling; pointer/service/native evidence in NATIVE_DRAG_DROP. Free move/gap composition remain staged |
+| CC-02 | P0 /00 | Core/service/CLI + UI | Shared baseline evaluator and atomic split/duplicate/delete/move/reorder/ripple; dry-run/conflict/source/output tests | PARTIAL; split/duplicate/ripple-delete/reorder implemented through core/service/CLI/Studio; 5 Store tests. Native media-card insertion and video/linked-audio body reordering now use boundary snapping, inert feedback, cancellation/stale guards and edge scrolling; pointer/service/native evidence in NATIVE_DRAG_DROP. Bounded free primary movement/gaps and ordered video/PNG layers now implemented in schema3; crop/rotation/direct handles remain V2 |
 | CC-03 | P0 /02 | Storage/service + UI | Monotonic undo/redo, versioned clipboard, aliases/project-only removal; two-client/legacy tests | IMPLEMENTED; shared Undo/Redo/clipboard plus media list/inspect/aliases/restricted reference removal, old-schema/FTS/rollback/replay/source preservation tests; native history and rename/undo/redo/reset sequence. Physical clipboard/keyboard and pointer rename/remove checks remain CC-14 acceptance; HISTORY_CLIPBOARD/STUDIO_POLISH |
 | CC-04 | P0 /02–03 | Composition/audio specialists | Versioned tracks/layers/gaps and shared evaluator; independent audio gain/mute/detach/mix/fades; migration/A/V parity | PARTIAL; schema2 independent audio placement/move/trim/range/gain/mute/delete, explicit all-history migration, actual source sample proof and shared preview/export mix implemented. 174-test integrated gate and34-check native acceptance verified; detach/fades/additional tracks/layers remain staged; ADR0021/AUDIO_COMPOSITION |
 | CC-05 | P0 /00;04 placement | Library/licensing + CLI/UI | Reviewed free pack downloads, hashes/notices/listening, stableIDs/search/preview, both-client placement; actual size measured | PARTIAL; 352 reviewed files (240 audio,110 PNG,2 fonts), paginated CLI discovery/check, native search/thumbnails/30s audition/source import. Independent audio placement uses ordinary proven-source import and Audio 1; image placement and subjective music fit remain staged |
@@ -101,6 +118,7 @@ All task records include phase, priority, dependencies, owner, scope, acceptance
 | LUM-008 | 0 / P1 | GPU hardware and native preview prototypes; 003 | Future / renderer, resources, benchmarks | Actual adapter telemetry + measured 1080p preview/resize, no fabricated VRAM | TODO | Requires renderer experiment; not CLI blocker |
 | LUM-009 | 3 / P0 | Authenticated single-writer service and events; 005 | Future / IPC, service | Two clients, missed-event recovery, ACL, conflicts, restart tests | DONE | Implemented by NAT-003; seven actual service tests passed |
 | LUM-010 | 2 / P1 | Separate audio placement/transitions/export capabilities; 006 | Lead + audio specialists / graph, audio, preview, render, native | Actual audio mix/transitions plus decoded/golden comparisons | PARTIAL | Independent audio verified through shared preview/decoded export/native34checks; transitions/detach/fades staged |
+
 ## Remaining native acceptance and measured optimization
 
 DONE above describes the scoped verified baseline. The full professional-editor roadmap and partial checks in docs/testing/NATIVE_ACCEPTANCE.md remain open.

@@ -56,6 +56,80 @@ async fn bytes(connection: &mut SqliteConnection) -> Result<Vec<(i64, String)>> 
 }
 
 #[tokio::test]
+async fn schema_two_migration_keeps_audio_identity_all_history_and_receipt_bytes() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("project.lumeryn");
+    legacy(&path).await?;
+    let audio_track = Uuid::new_v4();
+    let mut connection = connect(&path).await?;
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT revision, snapshot FROM history ORDER BY revision")
+            .fetch_all(&mut connection)
+            .await?;
+    for (revision, json) in rows {
+        let mut project: Project = serde_json::from_str(&json)?;
+        project.schema_version = 2;
+        project.audio_track_id = Some(audio_track);
+        project.validate()?;
+        sqlx::query("UPDATE history SET snapshot=? WHERE revision=?")
+            .bind(serde_json::to_string(&project)?)
+            .bind(revision)
+            .execute(&mut connection)
+            .await?;
+        if revision == 2 {
+            sqlx::query("UPDATE project SET schema_version=2, snapshot=? WHERE id=1")
+                .bind(serde_json::to_string(&project)?)
+                .execute(&mut connection)
+                .await?;
+        }
+    }
+    let commands = bytes(&mut connection).await?;
+    let receipts: Vec<(String, String, i64, String)> =
+        sqlx::query_as("SELECT key, commands, revision, object_ids FROM receipts ORDER BY key")
+            .fetch_all(&mut connection)
+            .await?;
+    let mut store = Store::open(&path).await?;
+    assert_eq!(store.inspect().await?.schema_version, 2);
+    store
+        .backup(&directory.path().join("schema2-backup.lumeryn"))
+        .await?;
+    let migrated = store.migrate().await?;
+    assert_eq!(migrated["graph_from"], 2);
+    assert_eq!(migrated["graph_to"], 3);
+    assert_eq!(store.inspect().await?.audio_track_id, Some(audio_track));
+    assert_eq!(bytes(&mut connection).await?, commands);
+    let actual: Vec<(String, String, i64, String)> =
+        sqlx::query_as("SELECT key, commands, revision, object_ids FROM receipts ORDER BY key")
+            .fetch_all(&mut connection)
+            .await?;
+    assert_eq!(actual, receipts);
+    let rows: Vec<String> = sqlx::query_scalar("SELECT snapshot FROM history ORDER BY revision")
+        .fetch_all(&mut connection)
+        .await?;
+    for json in rows {
+        let project: Project = serde_json::from_str(&json)?;
+        assert_eq!(project.schema_version, 3);
+        assert_eq!(project.audio_track_id, Some(audio_track));
+        assert!(project.visual_tracks.is_empty());
+        assert!(project.visual_clips.is_empty());
+    }
+    store
+        .execute(
+            &Batch {
+                operations: vec![Edit::Redo {}],
+            },
+            Some(2),
+            None,
+            false,
+            &MediaTools::default(),
+        )
+        .await?;
+    assert_eq!(store.inspect().await?.width, 640);
+    store.integrity_check().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_graph_migration_preserves_history_receipts_and_legacy_read_shape() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("project.lumeryn");
@@ -107,7 +181,7 @@ async fn explicit_graph_migration_preserves_history_receipts_and_legacy_read_sha
             .await?;
     let migration = store.migrate().await?;
     assert_eq!(migration["graph_from"], 1);
-    assert_eq!(migration["graph_to"], 2);
+    assert_eq!(migration["graph_to"], 3);
     assert_eq!(migration["project_revision"], 2);
     let migrated = store.inspect().await?;
     let track = migrated
@@ -128,7 +202,7 @@ async fn explicit_graph_migration_preserves_history_receipts_and_legacy_read_sha
             .await?;
     for snapshot in histories {
         let previous: Project = serde_json::from_str(&snapshot)?;
-        assert_eq!(previous.schema_version, 2);
+        assert_eq!(previous.schema_version, 3);
         assert_eq!(previous.audio_track_id, Some(track));
         assert!(previous.audio_clips.is_empty());
     }
@@ -208,7 +282,7 @@ fn legacy_schema_rejects_audio_extensions_and_future_versions() -> Result<()> {
     assert!(project.validate().is_err());
     project.audio_track_id = None;
     project.validate()?;
-    project.schema_version = 3;
+    project.schema_version = 4;
     assert!(matches!(project.validate(), Err(Error::Unsupported(_))));
     let track = Uuid::new_v4();
     let mut value = serde_json::to_value(project)?;
@@ -295,7 +369,7 @@ async fn mixed_graph_history_cannot_downgrade_current_project_on_undo() -> Resul
     );
     assert!(store.integrity_check().await.is_err());
     let current = store.inspect().await?;
-    assert_eq!(current.schema_version, 2);
+    assert_eq!(current.schema_version, 3);
     assert_eq!(current.revision, 1);
     assert_eq!(current.audio_track_id, project.audio_track_id);
     Ok(())

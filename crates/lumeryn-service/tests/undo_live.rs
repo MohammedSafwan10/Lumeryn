@@ -619,7 +619,7 @@ async fn pre_undo_schema_one_fixture_requires_explicit_graph_migration_before_un
     drop(legacy_copy);
     let migrated = client.call(Request::Migrate).await?;
     assert_eq!(migrated["graph_from"], 1);
-    assert_eq!(migrated["graph_to"], 2);
+    assert_eq!(migrated["graph_to"], 3);
     assert_eq!(migrated["project_revision"], 1);
     assert_eq!(client.history().await?, durable);
     let event = client.watch(Some(before.sequence), 0).await?;
@@ -639,7 +639,7 @@ async fn pre_undo_schema_one_fixture_requires_explicit_graph_migration_before_un
     let snapshot = event
         .snapshot
         .ok_or_else(|| Error::Invalid("migration watch snapshot is missing".into()))?;
-    assert_eq!(snapshot.schema_version, 2);
+    assert_eq!(snapshot.schema_version, 3);
     assert_eq!(snapshot.revision, 1);
     let audio_track = snapshot
         .audio_track_id
@@ -647,7 +647,7 @@ async fn pre_undo_schema_one_fixture_requires_explicit_graph_migration_before_un
     client.call(Request::Check { assets: false }).await?;
     execute(&client, batch(Edit::Undo {}), 1).await?;
     assert_eq!(client.inspect().await?.clips[0].duration_frames, 300);
-    assert_eq!(client.inspect().await?.schema_version, 2);
+    assert_eq!(client.inspect().await?.schema_version, 3);
     assert_eq!(client.inspect().await?.audio_track_id, Some(audio_track));
     client.call(Request::Check { assets: false }).await?;
     let backup = directory.path().join("legacy-backup.lumeryn");
@@ -658,7 +658,7 @@ async fn pre_undo_schema_one_fixture_requires_explicit_graph_migration_before_un
         .await?;
     let mut copied = Store::open(&backup).await?;
     assert_eq!(copied.inspect().await?.revision, 2);
-    assert_eq!(copied.inspect().await?.schema_version, 2);
+    assert_eq!(copied.inspect().await?.schema_version, 3);
     assert_eq!(copied.inspect().await?.audio_track_id, Some(audio_track));
     copied.integrity_check().await?;
     drop(copied);

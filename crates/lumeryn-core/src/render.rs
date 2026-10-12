@@ -2,6 +2,7 @@ use crate::{
     Error, MediaTools, Project, Result,
     audio_plan::AudioPlan,
     media::{content_hash, local_file},
+    visual_plan::{VisualPlan, requires_composition},
 };
 use serde::Serialize;
 mod encoder;
@@ -98,12 +99,17 @@ where
     }
     let mut clips = project.clips.iter().collect::<Vec<_>>();
     clips.sort_by_key(|c| c.at_frame);
-    if clips.is_empty() || clips.len() > 64 {
+    let visual_plan = if requires_composition(project) {
+        Some(VisualPlan::from_project(project, database).await?)
+    } else {
+        None
+    };
+    if visual_plan.is_none() && (clips.is_empty() || clips.len() > 64) {
         return Err(Error::Unsupported(
             "export requires 1..64 contiguous clips".into(),
         ));
     }
-    let mut frames = 0_u64;
+    let mut frames = visual_plan.as_ref().map_or(0, |plan| plan.total_frames);
     let mut args = [
         "-hide_banner",
         "-v",
@@ -120,12 +126,12 @@ where
     let mut source_digests = Vec::new();
     // Keep the established video-only evaluator stable. Independent audio activates
     // the shared canonical mix also consumed by native playback.
-    let audio_plan = if project.audio_clips.is_empty() {
+    let audio_plan = if project.audio_clips.is_empty() && visual_plan.is_none() {
         None
     } else {
         Some(AudioPlan::from_project(project, database).await?)
     };
-    for (index, clip) in clips.iter().enumerate() {
+    for (index, clip) in clips.iter().enumerate().filter(|_| visual_plan.is_none()) {
         if clip.at_frame != frames {
             return Err(Error::Unsupported(
                 "export cannot render gaps or overlapping clips yet".into(),
@@ -207,7 +213,17 @@ where
             filters.push(format!("anullsrc=r=48000:cl=stereo,atrim=duration={duration},asetpts=PTS-STARTPTS[a{index}]"));
         }
     }
-    if let Some(plan) = &audio_plan {
+    if let Some(pictures) = &visual_plan {
+        let program = crate::visual_backend::lower(pictures, width, height)?;
+        args.extend(program.input_args);
+        filters.push(program.filters);
+        filters.push(format!("[{}]null[vcat]", program.output_label));
+        let plan = audio_plan
+            .as_ref()
+            .ok_or_else(|| Error::Invalid("composition audio plan missing".into()))?;
+        args.extend(plan.input_args());
+        filters.push(plan.filter_program(program.input_count, 0)?.filters);
+    } else if let Some(plan) = &audio_plan {
         let inputs = (0..clips.len())
             .map(|index| format!("[v{index}]"))
             .collect::<String>();
@@ -306,6 +322,9 @@ where
     if let Some(plan) = &audio_plan {
         plan.verify_sources().await?;
     }
+    if let Some(plan) = &visual_plan {
+        plan.verify_sources().await?;
+    }
     let metadata = tools.probe(temporary.path()).await?;
     let video = metadata
         .video
@@ -386,6 +405,28 @@ where
                     (f64::from(canvas_width) / f64::from(video.width))
                         .min(f64::from(canvas_height) / f64::from(video.height))
                         > 1.0
+                })
+        }) || project.visual_clips.iter().any(|clip| {
+            project
+                .media
+                .iter()
+                .find(|media| media.id == clip.media_id)
+                .and_then(|media| media.metadata.video.as_ref())
+                .is_some_and(|video| {
+                    let (rect_width, rect_height) = clip
+                        .placement
+                        .as_ref()
+                        .map_or((project.width, project.height), |rect| {
+                            (rect.width, rect.height)
+                        });
+                    (f64::from(rect_width) * f64::from(canvas_width)
+                        / f64::from(project.width)
+                        / f64::from(video.width))
+                    .min(
+                        f64::from(rect_height) * f64::from(canvas_height)
+                            / f64::from(project.height)
+                            / f64::from(video.height),
+                    ) > 1.0
                 })
         }),
     })

@@ -72,7 +72,7 @@ fn independent_audio_discovery_and_arguments_are_strict() -> TestResult {
     let directory = tempfile::tempdir()?;
     let directory = directory.path();
     let capabilities = success(directory, &["capabilities"])?;
-    assert_eq!(capabilities["project_schema_version"], 2);
+    assert_eq!(capabilities["project_schema_version"], 3);
     let implemented = capabilities["implemented"]
         .as_array()
         .ok_or("missing capabilities")?;
@@ -194,7 +194,7 @@ async fn explicit_legacy_migration_notifies_live_clients_without_fabricating_rev
         &["project", "migrate", "--project", "project.lumeryn"],
     )?;
     assert_eq!(migration["graph_from"], 1);
-    assert_eq!(migration["graph_to"], 2);
+    assert_eq!(migration["graph_to"], 3);
     assert_eq!(migration["project_revision"], 0);
     let changed = success(
         directory,
@@ -209,7 +209,7 @@ async fn explicit_legacy_migration_notifies_live_clients_without_fabricating_rev
             &sequence,
         ],
     )?;
-    assert_eq!(changed["snapshot"]["schema_version"], 2);
+    assert_eq!(changed["snapshot"]["schema_version"], 3);
     assert_eq!(changed["snapshot"]["revision"], 0);
     assert!(changed["snapshot"]["audio_track_id"].as_str().is_some());
     assert!(changed["sequence"].as_u64().ok_or("missing sequence")? > sequence.parse()?);

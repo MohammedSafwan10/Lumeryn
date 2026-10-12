@@ -13,3 +13,5 @@ pub use media::MediaTools;
 pub use model::{Batch, Edit, Project};
 pub use storage::Store;
 pub mod audio_plan;
+pub mod visual_backend;
+pub mod visual_plan;

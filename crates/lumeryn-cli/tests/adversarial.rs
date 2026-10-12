@@ -330,7 +330,7 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
     let variants = schema["$defs"]["Edit"]["oneOf"]
         .as_array()
         .ok_or("missing operation variants")?;
-    assert_eq!(variants.len(), 21);
+    assert_eq!(variants.len(), 30);
     for example in [
         json!({"operation":"import","id":"00000000-0000-4000-8000-000000000001","path":"source.mp4"}),
         json!({"operation":"rename_media","media_id":"00000000-0000-4000-8000-000000000001","alias":"Opening shot"}),
@@ -348,6 +348,15 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
         json!({"operation":"duplicate_clip","clip_id":"00000000-0000-4000-8000-000000000002","id":"00000000-0000-4000-8000-000000000003"}),
         json!({"operation":"delete_clip","clip_id":"00000000-0000-4000-8000-000000000002","ripple":true}),
         json!({"operation":"reorder_clip","clip_id":"00000000-0000-4000-8000-000000000002","before_clip_id":null}),
+        json!({"operation":"add_visual_track","id":"00000000-0000-4000-8000-000000000005","name":"Artwork"}),
+        json!({"operation":"reorder_visual_track","track_id":"00000000-0000-4000-8000-000000000005","before_track_id":null}),
+        json!({"operation":"delete_visual_track","track_id":"00000000-0000-4000-8000-000000000005"}),
+        json!({"operation":"add_visual_clip","id":"00000000-0000-4000-8000-000000000006","media_id":"00000000-0000-4000-8000-000000000001","track_id":"00000000-0000-4000-8000-000000000005","at_frame":0,"duration_frames":30,"source":{"kind":"image"},"placement":null}),
+        json!({"operation":"move_visual_clip","clip_id":"00000000-0000-4000-8000-000000000006","track_id":"00000000-0000-4000-8000-000000000005","at_frame":10}),
+        json!({"operation":"set_visual_range","clip_id":"00000000-0000-4000-8000-000000000006","at_frame":0,"duration_frames":20,"source":{"kind":"video","source_in_frame":10}}),
+        json!({"operation":"set_visual_placement","clip_id":"00000000-0000-4000-8000-000000000006","placement":null}),
+        json!({"operation":"delete_visual_clip","clip_id":"00000000-0000-4000-8000-000000000006"}),
+        json!({"operation":"move_clip","clip_id":"00000000-0000-4000-8000-000000000002","at_frame":10}),
         json!({"operation":"set_canvas","width":2160,"height":3840}),
         json!({"operation":"set_frame_rate","frame_rate":{"numerator":60000,"denominator":1001}}),
         json!({"operation":"undo"}),
@@ -369,7 +378,11 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
                 .as_object()
                 .ok_or("example not an object")?
                 .keys()
-                .filter(|name| !matches!(name.as_str(), "ripple" | "before_clip_id"))
+                .filter(|name| !matches!(
+                    name.as_str(),
+                    "ripple" | "before_clip_id" | "before_track_id"
+                ) && !(name.as_str() == "placement"
+                    && example["operation"] == "add_visual_clip"))
                 .count()
         );
         for name in required {

@@ -10,11 +10,11 @@ Private, proprietary software under development. No public source license is gra
 - Shared Rust project service with SQLite/SQLx, transactions, revision-aware writes, durable undo/redo and live CLI/Studio synchronization.
 - Staged background imports with immediate pending cards, cancellation, verified source identity and bounded preparation workers.
 - Explicit rational timeline FPS and optional first-video matching. Source, timeline and export rates are separate; the timeline rate stays locked while clips exist.
-- Video insertion, reorder, trim, split, duplicate and delete; independent mono/stereo audio placement, mixing, trim, gain and mute.
+- Bounded ordered video/PNG layers, gaps, contain rectangles and free movement; video insertion, reorder, trim, split, duplicate and delete; independent mono/stereo audio placement, mixing, trim, gain and mute.
 - A reviewed offline catalogue of 352 audio, graphic and font files, discoverable through both CLI and Studio.
 - Unrestricted local landscape and portrait UHD export at 24, 25, 30 and 60 FPS for the supported graph. H.264/H.265 depend on usable installed encoders; automatic hardware discovery has software fallbacks. Exports provide progress, cancellation and decoded-output verification.
 
-The current video renderer supports one contiguous matching-CFR SDR track with linked source audio and independently placed audio. Mixed source rates, editable text/vector scenes, masks, compositing, transitions, filters, recording, audio detach/fades and optional AI remain roadmap work. This is an editing foundation, not professional-editor parity. See [tested progress](PROGRESS.md) and the [feature inventory](docs/roadmap/CLIPCHAMP_FEATURE_INVENTORY.md).
+The sequential renderer supports64 contiguous matching-CFR SDR primary clips. The schema3 compositor supports three total visual placements (primary plus overlays), up to two extra tracks, two simultaneous videos/one PNG and UHD-bounded intermediates, with linked source and independent audio. Mixed source rates, editable text/vector scenes, masks, broader compositing, transitions, filters, recording, audio detach/fades and optional AI remain roadmap work. This is an editing foundation, not professional-editor parity. See [tested progress](PROGRESS.md) and the [feature inventory](docs/roadmap/CLIPCHAMP_FEATURE_INVENTORY.md).
 
 ## Build and run
 
@@ -29,10 +29,10 @@ lumeryn capabilities
 # Create a new project in a local, ignored directory.
 New-Item -ItemType Directory -Force projects/my-video
 lumeryn project create --project projects/my-video/project.lumeryn --name "My video" --preset landscape --fps 30
-.\target\debug\lumeryn-studio.exe --project projects/my-video/project.lumeryn
+lumeryn studio open --project projects/my-video/project.lumeryn --executable D:/Dev/freela/Lumeryn/target/debug/lumeryn-studio.exe
 ```
 
-Keep the built CLI and Studio binaries together. The authoritative service starts automatically in a hidden process; the CLI also works headlessly. There is no Node.js, WebView, mandatory cloud database or embedded agent runtime. Installers and automatic updates are not shipped yet.
+Double-click `launch-studio.cmd` for Welcome/Open/New, or create an opt-in desktop shortcut with `scripts/create-studio-shortcut.ps1`. Studio is a GUI in debug and release; startup failures are visible. Agent launch uses `studio open` and reports observed native-window state; `project open` stays headless. Keep the built CLI and Studio binaries together. The authoritative service starts automatically in a hidden process; the CLI also works headlessly. There is no Node.js, WebView, mandatory cloud database or embedded agent runtime. Installers and automatic updates are not shipped yet.
 
 ## Agent workflow
 
@@ -49,7 +49,7 @@ lumeryn project batch --help
 
 Select every project explicitly with `--project`. Inspect the current revision before writing and pass `--expected-revision`; dry-run atomic batches before applying them. Only verified media can be placed. Sources are never modified. Export to a new path and check the reported verification. Follow the [CLI workflows](docs/cli/WORKFLOWS.md) and [agent handoff](docs/cli/AGENT_QUICKSTART.md) for commands and errors.
 
-Media stays on disk, outside the project database. Use `project backup` for consistent backups; copying a live WAL database alone is unsafe. Legacy schema-1 projects require explicit backup/migration before new edits.
+Media stays on disk, outside the project database. Use `project backup` for consistent backups; copying a live WAL database alone is unsafe. Legacy schema-1/2 projects require explicit backup/migration before new edits.
 
 ## Verification
 

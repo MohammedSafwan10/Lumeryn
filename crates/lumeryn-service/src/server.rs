@@ -294,6 +294,7 @@ impl Service {
         let match_first_video = match_first_video
             && project.clips.is_empty()
             && project.audio_clips.is_empty()
+            && project.visual_clips.is_empty()
             && !project.media.iter().any(|source| {
                 source
                     .metadata

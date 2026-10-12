@@ -1,0 +1,85 @@
+# Independent composition review
+
+Date: 2026-10-10. Scope: the first bounded schema3 visual-composition slice, not the complete composition roadmap. The reviewer owns this report only and made no implementation edits, commits, owner-project writes or shared-target rebuilds.
+
+## Review method
+
+Read the product/architecture/delivery contracts and Rust coding instructions; inspect the actual graph, migration, prepared-source checks, VisualPlan, generated FFmpeg lowering, render publication, AudioPlan, preview generation/cancellation, CLI and native interaction changes. Review migration/graph/pixel/UHD/seek fixtures. Root and implementation owners remain responsible for the final executable gates after corrections.
+
+The reviewer independently ran the existing compiled `visual_graph` integration executable against disposable temporary projects: six tests passed, covering atomic dry-run/replay/undo, historical shapes, interval/source admission, free movement, source changes and prepared-source invalidation. This is baseline binary evidence, not proof that subsequent edits passed their gates.
+
+After backend corrections, independently ran four compiled visual unit tests and the actual changing-frame/large-canvas integration test: all passed. The latter compared source frames7–10 against the composed output with a leading gap, and validated a7680×4320 project-space still exported to genuine3840×2160.
+
+Independently ran all seven actual egui input-event composition gesture tests (0.24s), covering grabbed offsets, edges, stale revisions/epochs, project switches, Escape/focus loss, mixed-button input, PNG rejection on the primary row, and preservation of independent-audio move/trim on an empty added layer. Also independently ran the actual CLI composition/export/history fixture with decoded440/880Hz and silence windows (1.69s): passed. These are existing compiled executables run without rebuilding the shared target. Actual-window composition smoke and final combined gates remain pending in this review.
+
+## Findings and corrections
+
+| Finding | Initial impact | Review disposition |
+|---|---|---|
+| Selecting the new composition timeline removed primary trim, linked waveform dragging and independent audio waveform/move/trim/drop. | A new layer regressed previously working manual editing. | Source corrections restore these paths; independent actual egui primary/overlay edge and independent-audio move/trim tests passed. Real-window acceptance remains required. |
+| Primary Delete used ripple semantics after free movement introduced gaps; keyboard Delete treated overlay IDs as primary IDs. | Displayed deletion commands failed instead of deleting the selected object. | Source corrections now select nonripple deletion for composition and dispatch overlay deletion by object kind. |
+| Overlay Copy/Duplicate routed to primary-only operations. | Misleading NotFound errors. | Source corrections now explain the unsupported overlay clipboard/duplication scope explicitly. Primary Split/Copy remain available. |
+| Full-canvas placement on a canvas over3840 pixels was graph-admitted but planner-rejected. | An accepted canvas edit could make preview and UHD export fail. | Project-space rectangles now admit8192; actual large-canvas-to-UHD integration passed. Composition preview clamps its configured bounds to3840. |
+| Public mutable VisualPlan fields could bypass constructor checks before `active_at` performed unchecked endpoint arithmetic. | Offgraph Rust callers could cause an overflow panic or invalid wrapped evaluation. Process lowering rechecks admission, so the persisted production path was protected. | Scheduler now revalidates, uses checked endpoints and sorts active references. Overflow regression passed; sorting inspected. |
+| Project-space rectangle bounds did not bound the size of the intermediate scaled image. | A tiny valid canvas and large valid placement could request enormous FFmpeg scale dimensions before the overlay clipped them. Source/output bounds alone do not establish a worker memory bound. | Lowering now rejects projected intermediate dimensions above3840 before launching FFmpeg. Source-reviewed; adversarial tiny-canvas regression added for the final gate. |
+| Solid-colour moving-video fixtures did not establish the selected source frame. | Wrong source offsets or frame mapping could pass visible layer checks. | New changing-frame fixture independently passed byte comparisons against the requested source-frame range. |
+| The initial CLI composition test only searched the render JSON for a field name and did not inspect generated audio tones. | A false verification field or omitted overlay audio could pass that test. | Assertions now require true verification, exact output metadata/duration and decoded440/880Hz presence/absence/silence windows. Independent execution passed. |
+
+## Acceptance boundaries
+
+The first compositor admits at most three **total** primary/overlay placements, at most two moving sources and one PNG simultaneously, and two additional ordered visual tracks. The established contiguous sequential path retains its existing64-clip admission. These limits must appear in CLI discovery, Studio remedies and release notes; they are not general multitrack-editor readiness.
+
+The reference policy is encoded SDR straight-RGBA source-over, not linear-light or comprehensive colour management. Sources are verified CFR at the timeline rate; mixed source rates, transform handles/crop/rotation, scene typography, animation, effects, transitions and speed remain separate deliveries. Source bytes stay immutable. Preview origin-based seek cost, active decoder/memory measurements, physical input/device testing, high-DPI acceptance and sustained UHD playback are distinct from short synthetic pixel/export tests.
+
+Actual full-decode UHD output and shared-reference preview tests are valuable; passing them does not prove physical audio/video synchronization, long-duration drift, every hardware encoder or absence of all bugs. Final results and remaining checks belong in the root acceptance report.
+
+## Final independent review — 2026-10-12
+
+A fresh reviewer read the current source changes, the previous findings and the authoritative product/engineering contracts. Review covered graph IDs and source admission, all-history migration and rollback, strict CLI schema/capabilities, shared preview/export lowering and intermediate bounds, native media/library placement, primary/overlay/source-audio/independent-audio rows, cancellation and stale snapshot guards. Only this report was edited; no implementation files, owner project, source media or shared build target were changed by this reviewer.
+
+One additional usability defect was identified: the native Import media dialog's supported-extension filter omitted PNG despite the new image-hold capability. The lead corrected the filter to include PNG and the existing OGG library audio type. Library help now directs users to import a PNG and create a visual layer, rather than advertising image placement as unavailable. The lead was also notified about stale architecture paragraphs describing schema3/layers as unimplemented; final documentation must reconcile those statements.
+
+With the lead's permission, the reviewer executed the current compiled test binaries directly, using the installed FFmpeg/ffprobe 9.0.2 pair and disposable test data. All **25 focused tests passed**:
+
+- Eight real egui input-event composition tests (0.27 seconds), including primary/overlay right-edge trimming, grabbed offsets, stale revision/project/epoch, Escape/focus loss, mixed-button input, PNG rejection on the primary row, still rejection on linked audio, and preservation of independent-audio movement/trimming when an empty overlay track exists.
+- Six graph/source-proof tests (0.07 seconds), including dry-run, conflicts, idempotent replay, undo, explicit gaps, source changes and prepared-source invalidation.
+- Six migration/backward-compatibility tests (0.22 seconds), including all-history schema1/2 upgrades, preserved receipt/command bytes and schema2 audio identity, injected transactional rollback and corrupted restore targets.
+- Two CLI/schema tests (1.80 seconds), including an actual layered-video/PNG/gap export with verified output fields and decoded 440/880 Hz presence, absence and silence windows.
+- Two actual core pixel/source-time fixtures (0.20 and 0.80 seconds), verifying gap/layer/alpha endpoints, changing source-frame offsets and a 7680×4320 project canvas exported at genuine UHD resolution.
+- One actual preview/backward-seek parity fixture (0.75 seconds), comparing decoded preview bytes with the shared reference lowering.
+
+No outstanding blocking source defect was identified in this reviewed bounded slice. This is a scoped review, not a promise of no bugs or complete editor parity. The independent reruns do not replace the lead's final combined formatting/Clippy/default/media/license gates or actual-window composition smoke and visual capture inspection. Those results must be recorded separately before the lead marks the milestone verified.
+
+## Follow-up native launch review — 2026-10-12
+
+The owner subsequently reported a console/visibility launch problem. The reviewer inspected the new CLI `studio open` implementation, Win32 process/window boundary, Studio GUI subsystem and explicit startup diagnostic sink, root launcher, opt-in shortcut and launch tests. No launch implementation source was edited by this reviewer.
+
+The original actual launch check exposed a substantive inherited-pipe defect: the CLI process could exit while its GUI child retained ancestor capture handles, so an agent waiting for stdout/stderr EOF would hang. The corrected isolated `CreateProcessW` call passes `bInheritHandles = FALSE`, an explicit trusted executable and a writable NUL-terminated UTF-16 command line. File arguments are quoted as literal paths; no shell is invoked. Process/thread handles are uniquely owned by RAII, and callback context storage remains live for synchronous `EnumWindows`. Window observations filter by the launched child PID and exact title, check visible/minimized/cloaked/desktop state, and recheck process liveness before returning. Early exit and timeout are errors; timeout leaves the child's process running for diagnosis rather than terminating it or an unrelated process.
+
+The PE header preflight rejects stale console builds, scripts, truncated/non-PE files and oversized header offsets. Both debug and release Studio are GUI-subsystem builds; the separate CLI remains a console program. Studio startup diagnostics use a fresh local file with create-new semantics and bounded error text. No project is selected or created during zero-argument startup, and the launch command inspects an explicitly selected project without editing or migrating it. Source files, saved projects and desktop shortcuts are not rewritten by the reviewer.
+
+The reviewer independently ran six current compiled tests: two PE/window-admission unit tests, three CLI launch argument/early-exit/timeout tests, and the native create-new/bounded diagnostic test. All passed; the actual-window integration test remained ignored in this independent default run. The lead separately recorded an actual guarded capture launch completing in **854 ms** while the GUI was alive, with the returned handle owned by the child and a subsequent graceful close. That receipt reports `visible=true`, `minimized=false`, `cloaked=false`, desktop intersection and matching caller/child session; **foreground=false** and project-rendered/physical-screen confirmation remain unknown. The reviewer read that receipt rather than claiming independent physical observation.
+
+Review requested an independent parent-side EOF deadline in the actual launch regression test: a blocking `Command::output` alone can itself hang on the defect it is intended to catch. The lead owns that final test improvement and its execution. No remaining blocking launch source defect was identified in the reviewed implementation. A PID, window state or framebuffer capture still does not prove that the owner saw an unobscured, loaded editor; result fields and user-facing statements must retain that distinction.
+
+The reviewer also inspected the stored wide and compact composition PNGs. They show real layered video PIP, intrinsic PNG alpha, named rows and source peaks. The compact PNG is the earlier version with inactive rectangle fields; the lead's later refined Inspector capture has its separate evidence. Final gate/launch evidence is recorded in `COMPOSITION_ACCEPTANCE.md` and `STUDIO_LAUNCH.md` rather than inferred from this source review.
+
+## Final worker-console and EOF follow-up — 2026-10-12
+
+The owner physically confirmed that Studio itself appeared but reported two extra terminal windows on media loading and layer creation. The lead traced the console hosts to FFmpeg children of the running Studio. This is a separate child-worker defect from the inherited-capture-pipe defect above; a GUI-subsystem Studio does not by itself suppress consoles allocated by console-subsystem decoder children.
+
+The reviewer audited every Rust production process-construction site. All four media-worker sites now route through `media::worker_command` / `async_worker_command`: core canonical-audio decoding, core generic probe/render/tool execution, preview `WorkerPipe`, and Studio waveform extraction. Thumbnail and background CLI verification work already uses `MediaTools::run`. Remaining direct FFmpeg constructors in production source directories are isolated `cfg(test)` fixtures. The separate service and interactive Studio launchers retain their reviewed policies.
+
+The factory applies Windows `CREATE_NO_WINDOW` before adapting the standard command into Tokio. Arguments, environment, standard-stream redirection, caller cancellation/timeouts and kill-on-drop remain under the existing call sites' control. It does not hide Studio, change the project graph or introduce a window dependency or new library version into the core. The reviewer independently ran the current compiled no-console regression: a genuine detached parent and the child launched through the factory both assert `GetConsoleWindow() == NULL`, and both redirected output markers survive. It passed in **0.03 seconds**. Three current compiled default CLI launch tests also passed in **6.07 seconds**; the actual-window test was not rerun by this reviewer during the lead's full gate.
+
+The actual launch regression now has an independent **45-second first-receipt deadline** and **five-second shared stdout/stderr EOF deadline**, with CLI exit and continued child-window ownership checked separately. Before asserting an EOF failure it requests graceful closure only of the rechecked test-owned window. This resolves the previous review request in source; the lead records the final actual-window execution separately. No source blocker was identified in the reviewed factory or bounded EOF correction.
+
+The owner's existing running editor uses its already-loaded old binary and was left untouched by the correction/review. Verification of replacement binaries does not certify that an un-restarted old editor has stopped creating consoles. Final full/native gates and any owner-approved restart belong to the lead's acceptance record; no unrelated process or owner project was closed, rewritten or migrated by this reviewer.
+
+## Responsive footer follow-up — reviewer findings and lead verification
+
+The independent reviewer inspected the real980×640 and1280×720 media-state captures in `.lumeryn-scratch/media-footer-captures-2cf2b6bb9df2404c8e1bf7d8320e44a4/`. Both Add to timeline and Add video to layer are fully visible. The old media-grid height budget reserved only one action; the new budget includes both actions, small-text FPS details, interaction height and spacing. The lead additionally made the label reservation conservative across selection changes.
+
+Review found an integration omission: actual media cards still excluded PNGs from drag creation even though visual target rows supported them. The lead removed that source guard, extracted the actual card gesture into the shared `media_card_drag` helper, and routed the existing target gesture suite through it. A new test also drives the real `Session::media_panel` through egui pointer events with verified PNG/video/audio fixtures; editable primary drags carry the expected project/revision/epoch/media ID, while disconnected/busy/secondary gestures create no payload. This real-panel test and all eight composition gesture cases passed. Destination compatibility remains explicit: PNGs cannot be dropped on primary video or linked audio rows.
+
+This paragraph records the reviewer messages and the lead's executed correction/tests. The reviewer reached a usage limit before a final second source pass; it is not a claim of an independent post-correction rerun. Final integrated gates and native captures are the lead's acceptance record.

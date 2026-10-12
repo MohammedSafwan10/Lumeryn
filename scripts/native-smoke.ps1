@@ -1,8 +1,9 @@
 # Opens the real native window and modifies only freshly generated disposable projects.
-param([switch]$SkipBuild, [switch]$Uhd, [switch]$Portrait, [switch]$History, [switch]$Audio)
+param([switch]$SkipBuild, [switch]$Uhd, [switch]$Portrait, [switch]$History, [switch]$Audio, [switch]$Composition)
 $ErrorActionPreference = 'Stop'
 # Honor isolated Cargo output so acceptance never replaces a running user editor.
 $lumerynTarget = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR, (Split-Path $PSScriptRoot -Parent)) } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'target' }
+if ($Composition -and $Audio) { throw '-Composition and -Audio use separate disposable workflows' }
 if ($Portrait -and -not $Uhd) { throw '-Portrait requires -Uhd in this acceptance script' }
 $nativeRoot = Split-Path $PSScriptRoot -Parent
 function Wait-LumerynBuildFiles([string[]]$Paths) {
@@ -50,6 +51,19 @@ try {
         & $nativeFfmpeg -hide_banner -loglevel error -nostdin -n -f lavfi -i 'sine=frequency=880:sample_rate=48000:duration=2' -ac 2 -c:a pcm_s16le (Join-Path $nativeDirectory 'voiceover.wav')
         if ($LASTEXITCODE -ne 0) { throw 'Disposable native audio fixture generation failed' }
     }
+    if ($Composition) {
+        $compositionFfmpeg = if ($env:LUMERYN_FFMPEG) { $env:LUMERYN_FFMPEG } else { 'ffmpeg' }
+        & $compositionFfmpeg -v error -nostdin -n -f lavfi -i 'testsrc2=s=640x360:r=30:d=2' -f lavfi -i 'sine=frequency=880:sample_rate=48000:duration=2' -c:v ffv1 -c:a pcm_s16le (Join-Path $nativeDirectory 'overlay.mkv')
+        if ($LASTEXITCODE -ne 0) { throw 'Composition video fixture generation failed' }
+        & $compositionFfmpeg -v error -nostdin -n -f lavfi -i 'color=yellow@0.35:s=320x180,format=rgba' -frames:v 1 (Join-Path $nativeDirectory 'artwork.png')
+        if ($LASTEXITCODE -ne 0) { throw 'Composition PNG fixture generation failed' }
+        foreach ($compositionName in @('overlay.mkv','artwork.png')) {
+            $compositionBefore = (& $nativeCli project inspect --project $nativeDemo.project | ConvertFrom-Json).result
+            if ($LASTEXITCODE -ne 0) { throw 'Composition project inspection failed' }
+            & $nativeCli media import --project $nativeDemo.project --path (Join-Path $nativeDirectory $compositionName) --expected-revision $compositionBefore.revision | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Composition source import failed' }
+        }
+    }
     if ($Portrait) {
         $portraitBefore = (& $nativeCli project inspect --project $nativeDemo.project | ConvertFrom-Json).result
         if ($LASTEXITCODE -ne 0) { throw 'Portrait fixture inspection failed' }
@@ -63,6 +77,7 @@ try {
     if ($Uhd) { $nativeArguments += '--smoke-uhd' }
     if ($History) { $nativeArguments += '--smoke-history' }
     if ($Audio) { $nativeArguments += '--smoke-audio' }
+    if ($Composition) { $nativeArguments += '--smoke-composition' }
     $nativeWatch = [Diagnostics.Stopwatch]::StartNew()
     $nativeProcess = Start-Process -FilePath (Join-Path $lumerynTarget 'debug/lumeryn-studio.exe') -ArgumentList $nativeArguments -WindowStyle Normal -PassThru -RedirectStandardError (Join-Path $nativeDirectory 'stderr.log') -RedirectStandardOutput (Join-Path $nativeDirectory 'stdout.log')
     $nativeSamples = [Collections.Generic.List[object]]::new()
@@ -95,6 +110,7 @@ try {
     $nativeMetrics['binaries'] = @{cli_sha256=(Get-FileHash -LiteralPath $nativeCli -Algorithm SHA256).Hash;studio_sha256=(Get-FileHash -LiteralPath $nativeStudio -Algorithm SHA256).Hash}
     Write-LumerynJsonArtifact -Path (Join-Path $nativeDirectory 'process-metrics.json') -Value $nativeMetrics -Depth 10
     if ($nativeProcess.ExitCode -ne 0 -or -not $nativeReport.passed) { throw ('Native smoke failed; inspect ' + $nativeDirectory) }
+    if ($Composition -and (-not $nativeReport.composition_acceptance -or @($nativeReport.checks | Where-Object check -eq 'native_shared_composition_step').Count -ne 8)) { throw 'Eight native shared composition transitions were not verified' }
     if ($History -and (-not $nativeReport.history_clipboard_acceptance -or @($nativeReport.checks | Where-Object check -eq 'native_shared_history_step').Count -ne 12)) { throw 'Twelve native history/clipboard/media-name transitions were not verified' }
     if (@($nativeReport.checks | Where-Object check -eq 'native_shared_drop_step').Count -ne 4) { throw 'Native insert/reorder/undo transitions were not verified' }
     if ($Audio -and (-not $nativeReport.independent_audio_acceptance -or @($nativeReport.checks | Where-Object check -eq 'native_independent_audio_step').Count -ne 8)) { throw 'Eight native audio import/place/trim/move/gain/mute/delete/undo transitions were not verified' }

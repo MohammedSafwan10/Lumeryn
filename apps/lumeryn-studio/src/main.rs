@@ -1,7 +1,11 @@
+// Studio is a GUI in debug builds too; the separate lumeryn binary remains a console CLI.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod app;
 mod assets;
 mod backend;
 mod capture;
+mod composition_timeline;
 mod design;
 mod gpu;
 mod library;
@@ -9,13 +13,20 @@ mod smoke;
 mod timeline;
 
 use clap::Parser;
-use std::{path::PathBuf, process::ExitCode};
+use std::{
+    fs::{File, OpenOptions},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
 pub enum CaptureState {
     Active,
+    Media,
     Export,
     Inspector,
+    Visual,
     Audio,
     Project,
     Importing,
@@ -34,6 +45,9 @@ pub struct Options {
     launch_started: Option<std::time::Instant>,
     #[arg(long)]
     project: Option<PathBuf>,
+    /// Write bounded native startup diagnostics to a new local file; never overwrite one.
+    #[arg(long)]
+    launch_log: Option<PathBuf>,
     /// Optional curated offline library root (catalog.json and asset files).
     #[arg(long)]
     library: Option<PathBuf>,
@@ -49,6 +63,9 @@ pub struct Options {
     /// Verify native independent audio placement, editing and mixed export on disposable media.
     #[arg(long, requires = "smoke")]
     smoke_audio: bool,
+    /// Verify native layer/image placement and editing on a disposable project.
+    #[arg(long, requires = "smoke", conflicts_with = "smoke_audio")]
+    smoke_composition: bool,
     /// Capture an actual native UI state without editing the project.
     #[arg(long, requires = "artifact_dir", conflicts_with = "smoke")]
     capture_only: bool,
@@ -71,7 +88,42 @@ pub struct Options {
 
 fn main() -> ExitCode {
     let launch_started = std::time::Instant::now();
-    let mut options = Options::parse();
+    let mut options = match Options::try_parse() {
+        Ok(options) => options,
+        Err(error) => {
+            let failed = error.use_stderr();
+            if let Err(print_error) = error.print() {
+                eprintln!("Studio argument output failed: {print_error}");
+            }
+            if failed {
+                // Malformed automated requests must still return an exit code, never block on a dialog.
+                let automated =
+                    std::env::args_os().any(|arg| arg == "--smoke" || arg == "--capture-only");
+                show_startup_error(&error.to_string(), !automated);
+            }
+            return if failed {
+                ExitCode::from(2)
+            } else {
+                ExitCode::SUCCESS
+            };
+        }
+    };
+    let interactive = !(options.smoke || options.capture_only);
+    let mut startup_log = match options
+        .launch_log
+        .as_deref()
+        .map(StartupLog::create)
+        .transpose()
+    {
+        Ok(log) => log,
+        Err(error) => {
+            return startup_failure(
+                &format!("Create native startup diagnostic file: {error}"),
+                interactive,
+                None,
+            );
+        }
+    };
     options.launch_started = Some(launch_started);
     if (options.smoke || options.capture_only)
         && let Some(directory) = &options.artifact_dir
@@ -86,12 +138,18 @@ fn main() -> ExitCode {
         .iter()
         .any(|file| directory.join(file).exists())
         {
-            eprintln!("Smoke artifacts must be new; choose a fresh artifact directory");
-            return ExitCode::FAILURE;
+            return startup_failure(
+                "Smoke artifacts must be new; choose a fresh artifact directory",
+                interactive,
+                startup_log.as_mut(),
+            );
         }
         if let Err(error) = std::fs::create_dir_all(directory) {
-            eprintln!("Create smoke artifact directory: {error}");
-            return ExitCode::FAILURE;
+            return startup_failure(
+                &format!("Create smoke artifact directory: {error}"),
+                interactive,
+                startup_log.as_mut(),
+            );
         }
     }
     let report = options
@@ -134,8 +192,11 @@ fn main() -> ExitCode {
         native,
         Box::new(move |cc| Ok(Box::new(app::Studio::new(cc, options)))),
     ) {
-        eprintln!("Native Studio failed: {error}");
-        return ExitCode::FAILURE;
+        return startup_failure(
+            &format!("Native Studio failed: {error}"),
+            interactive,
+            startup_log.as_mut(),
+        );
     }
     if let Some(path) = report {
         let passed = std::fs::read(path)
@@ -158,4 +219,93 @@ fn main() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// This explicit sink has no global subscriber, argument dump, project data or inherited pipe.
+struct StartupLog(File);
+
+impl StartupLog {
+    fn create(path: &Path) -> io::Result<Self> {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        file.write_all(b"{\"event\":\"startup_requested\"}\n")?;
+        file.sync_data()?;
+        Ok(Self(file))
+    }
+
+    fn failure(&mut self, message: &str) -> io::Result<()> {
+        // Driver errors can be large. Keep this diagnostic bounded on Unicode boundaries.
+        let bounded: String = message.chars().take(4096).collect();
+        let record = serde_json::json!({"event": "startup_failed", "message": bounded});
+        writeln!(self.0, "{record}")?;
+        self.0.sync_data()
+    }
+}
+
+fn startup_failure(
+    message: &str,
+    interactive: bool,
+    startup_log: Option<&mut StartupLog>,
+) -> ExitCode {
+    eprintln!("{message}");
+    if let Some(log) = startup_log
+        && let Err(error) = log.failure(message)
+    {
+        eprintln!("Write native startup diagnostic: {error}");
+    }
+    show_startup_error(message, interactive);
+    ExitCode::FAILURE
+}
+
+fn show_startup_error(message: &str, interactive: bool) {
+    #[cfg(windows)]
+    if interactive {
+        rfd::MessageDialog::new()
+            .set_title("Lumeryn Studio could not start")
+            .set_description(message)
+            .set_level(rfd::MessageLevel::Error)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
+    #[cfg(not(windows))]
+    let _ = (message, interactive);
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    #[test]
+    fn startup_log_is_create_new_and_bounded_without_arguments() {
+        let path =
+            std::env::temp_dir().join(format!("lumeryn-launch-{}.log", uuid::Uuid::new_v4()));
+        let mut log = StartupLog::create(&path).expect("create isolated startup log");
+        let original = std::fs::read(&path).expect("startup log exists");
+        assert!(matches!(
+            StartupLog::create(&path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(std::fs::read(&path).expect("read preserved log"), original);
+        log.failure(&"é".repeat(5000))
+            .expect("write bounded Unicode error");
+        drop(log);
+        let bytes = std::fs::read(&path).expect("read startup diagnostic");
+        assert!(bytes.len() < 20_000);
+        let records: Vec<serde_json::Value> = std::str::from_utf8(&bytes)
+            .expect("valid UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("valid JSON line"))
+            .collect();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0], serde_json::json!({"event":"startup_requested"}));
+        assert_eq!(records[1]["event"], "startup_failed");
+        assert_eq!(
+            records[1]["message"]
+                .as_str()
+                .expect("error text")
+                .chars()
+                .count(),
+            4096
+        );
+        std::fs::remove_file(path).expect("remove this test's isolated log");
+    }
 }

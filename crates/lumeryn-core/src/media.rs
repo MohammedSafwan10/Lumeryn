@@ -12,6 +12,30 @@ use tokio::{
     process::Command,
 };
 
+/// Construct a background media/tool worker without allocating a Windows console.
+///
+/// GUI parents have no console for a console-subsystem FFmpeg/ffprobe to inherit.
+/// CREATE_NO_WINDOW prevents Windows from allocating one; it does not hide Studio
+/// or change the worker's redirected pipes, arguments, environment or lifecycle.
+/// See https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags.
+pub fn worker_command(executable: &Path) -> std::process::Command {
+    let command = std::process::Command::new(executable);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = command;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW; not DETACHED_PROCESS/NEW_CONSOLE.
+        command
+    }
+    #[cfg(not(windows))]
+    command
+}
+
+/// Tokio adapter for the same worker policy; callers retain their pipe/cancel/timeout policy.
+pub fn async_worker_command(executable: &Path) -> Command {
+    Command::from(worker_command(executable))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {
@@ -279,7 +303,7 @@ impl MediaTools {
         )
         .collect::<Vec<_>>();
         let started = std::time::Instant::now();
-        let mut child = Command::new(&self.ffmpeg)
+        let mut child = async_worker_command(&self.ffmpeg)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -364,7 +388,7 @@ impl MediaTools {
     pub async fn run(&self, executable: &Path, args: &[OsString]) -> Result<Vec<u8>> {
         let started = std::time::Instant::now();
         tracing::debug!(tool = ?executable.file_name(), "starting bounded media worker");
-        let mut child = Command::new(executable)
+        let mut child = async_worker_command(executable)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -842,6 +866,87 @@ pub async fn content_hash(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetConsoleWindow() -> *mut std::ffi::c_void;
+    }
+
+    #[cfg(windows)]
+    fn has_console() -> bool {
+        // SAFETY: this query takes no arguments and returns a borrowed HWND that is only
+        // compared with null, never dereferenced or closed. Win32 is confined to this test.
+        !unsafe { GetConsoleWindow() }.is_null()
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn worker_from_no_console_parent_preserves_pipes_without_console() -> Result<()> {
+        const ROLE: &str = "LUMERYN_MEDIA_CONSOLE_TEST_ROLE";
+        const NAME: &str =
+            "media::tests::worker_from_no_console_parent_preserves_pipes_without_console";
+        let executable = std::env::current_exe()?;
+        match std::env::var(ROLE).as_deref() {
+            Ok("probe") => {
+                assert!(!has_console(), "media worker must not allocate a console");
+                println!("media-worker-stdout-without-console");
+                eprintln!("media-worker-stderr-without-console");
+                Ok(())
+            }
+            role => {
+                let mut command = if role == Ok("parent") {
+                    assert!(
+                        !has_console(),
+                        "test parent must have no console, like Studio"
+                    );
+                    async_worker_command(&executable)
+                } else {
+                    // The outer console test harness starts a genuine no-console parent.
+                    // Without the factory's CREATE_NO_WINDOW, its console child allocates one.
+                    let mut detached = Command::new(&executable);
+                    detached.creation_flags(0x0000_0008); // DETACHED_PROCESS; test parent only.
+                    detached
+                };
+                let inner_role = if role == Ok("parent") {
+                    "probe"
+                } else {
+                    "parent"
+                };
+                let output = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    command
+                        .args(["--exact", NAME, "--nocapture"])
+                        .env(ROLE, inner_role)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .kill_on_drop(true)
+                        .output(),
+                )
+                .await
+                .map_err(|error| {
+                    Error::Media(format!("no-console worker test timed out: {error}"))
+                })??;
+                assert!(
+                    output.status.success(),
+                    "worker test failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                if inner_role == "probe" {
+                    assert!(
+                        String::from_utf8_lossy(&output.stdout)
+                            .contains("media-worker-stdout-without-console")
+                    );
+                    assert!(
+                        String::from_utf8_lossy(&output.stderr)
+                            .contains("media-worker-stderr-without-console")
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
     #[test]
     fn timestamps_are_integer() -> Result<()> {
         assert_eq!(decimal_micros("1.001000")?, 1_001_000);

@@ -40,6 +40,13 @@ enum Stage {
         original: Uuid,
         revision: u64,
     },
+    StartComposition {
+        step: u8,
+    },
+    Composition {
+        step: u8,
+        revision: u64,
+    },
     StartAudio {
         step: u8,
     },
@@ -82,6 +89,10 @@ pub struct Smoke {
     screenshot_assets: Option<Value>,
     history_enabled: bool,
     history_steps: VecDeque<HistoryStep>,
+    composition_enabled: bool,
+    composition_tracks: [Uuid; 2],
+    composition_video: Option<Uuid>,
+    composition_image: Option<Uuid>,
     audio_enabled: bool,
     audio_media: Uuid,
     audio_clip: Option<Uuid>,
@@ -110,7 +121,12 @@ fn audio_label(step: u8) -> &'static str {
 }
 
 impl Smoke {
-    pub fn new(directory: PathBuf, history_enabled: bool, audio_enabled: bool) -> Self {
+    pub fn new(
+        directory: PathBuf,
+        history_enabled: bool,
+        audio_enabled: bool,
+        composition_enabled: bool,
+    ) -> Self {
         Self {
             directory,
             started: Instant::now(),
@@ -123,6 +139,10 @@ impl Smoke {
             screenshot_assets: None,
             history_enabled,
             history_steps: VecDeque::new(),
+            composition_enabled,
+            composition_tracks: [Uuid::new_v4(), Uuid::new_v4()],
+            composition_video: None,
+            composition_image: None,
             audio_enabled,
             audio_media: Uuid::new_v4(),
             audio_clip: None,
@@ -164,6 +184,7 @@ impl Smoke {
             "render_result":session.last_render,
             "history_clipboard_acceptance":self.history_enabled,
             "independent_audio_acceptance":self.audio_enabled,
+            "composition_acceptance":self.composition_enabled,
             "limitations":["Scripted actions call the same UI command paths; pointer usability and native file-dialog cancellation are separate manual acceptance.","CPU upload timing does not measure GPU completion or photon latency.","VRAM consumption is unknown without telemetry.","Audio device status alone does not prove end-to-end A/V tolerance.","Effects, additional track topology and proxies remain staged; physical clipboard and keyboard checks remain pending. Thumbnail/waveform caches are bounded; readiness/counts are reported independently of workflow success."]
         });
         if session.send(Command::Report {
@@ -581,6 +602,10 @@ impl Smoke {
             }
             Stage::StartDrop { step, original } => {
                 if step == 4 {
+                    if self.composition_enabled {
+                        self.stage = Stage::StartComposition { step: 0 };
+                        return;
+                    }
                     if self.audio_enabled {
                         self.stage = Stage::StartAudio { step: 0 };
                         return;
@@ -672,6 +697,204 @@ impl Smoke {
                     step: step + 1,
                     original,
                 };
+            }
+            Stage::StartComposition { step } => {
+                use lumeryn_core::{
+                    Batch, Edit,
+                    model::{VisualPlacement, VisualSource},
+                };
+                if step == 8 {
+                    if session.export(self.directory.join("studio-smoke-export.mp4")) {
+                        self.stage = Stage::Export {
+                            ui_frames: session.ui_frames,
+                        };
+                    }
+                    return;
+                }
+                let Some(project) = &session.project else {
+                    return;
+                };
+                let revision = project.revision;
+                let canvas = (project.width, project.height);
+                let primary_media = project.clips.first().map(|c| c.media_id);
+                let video = project
+                    .media
+                    .iter()
+                    .find(|m| {
+                        Some(m.id) != primary_media
+                            && m.metadata.video.as_ref().is_some_and(|v| v.codec != "png")
+                    })
+                    .map(|m| m.id);
+                let image = project
+                    .media
+                    .iter()
+                    .find(|m| m.metadata.video.as_ref().is_some_and(|v| v.codec == "png"))
+                    .map(|m| m.id);
+                let submitted = match step {
+                    0 | 1 => session.edit(
+                        Edit::AddVisualTrack {
+                            id: self.composition_tracks[usize::from(step)],
+                            name: if step == 0 {
+                                "Overlay".into()
+                            } else {
+                                "Artwork".into()
+                            },
+                        },
+                        "Smoke layer",
+                    ),
+                    2 | 4 => {
+                        let Some(media) = (if step == 2 { video } else { image }) else {
+                            self.finish(
+                                session,
+                                false,
+                                Some(
+                                    "Composition smoke requires a second moving source and PNG"
+                                        .into(),
+                                ),
+                            );
+                            return;
+                        };
+                        let Some(payload) =
+                            session.drag_payload(timeline::DragSource::Media(media))
+                        else {
+                            return;
+                        };
+                        session.drop_visual(
+                            payload,
+                            self.composition_tracks[usize::from(step == 4)],
+                            10,
+                        );
+                        true
+                    }
+                    3 => {
+                        let Some(id) = self.composition_video else {
+                            return;
+                        };
+                        session.edit_batch(
+                            Batch {
+                                operations: vec![
+                                    Edit::SetVisualRange {
+                                        clip_id: id,
+                                        at_frame: 10,
+                                        duration_frames: 30,
+                                        source: VisualSource::Video { source_in_frame: 5 },
+                                    },
+                                    Edit::SetVisualPlacement {
+                                        clip_id: id,
+                                        placement: Some(VisualPlacement {
+                                            x: (canvas.0 / 2) as i32,
+                                            y: 0,
+                                            width: canvas.0 / 2,
+                                            height: canvas.1 / 2,
+                                        }),
+                                    },
+                                ],
+                            },
+                            "Smoke visual range",
+                        )
+                    }
+                    5 => {
+                        let Some(id) = self.composition_image else {
+                            return;
+                        };
+                        let Some(payload) =
+                            session.drag_payload(timeline::DragSource::VisualClip {
+                                clip: id,
+                                grab_offset: 0,
+                            })
+                        else {
+                            return;
+                        };
+                        session.drop_visual(payload, self.composition_tracks[1], 20);
+                        true
+                    }
+                    6 => {
+                        let Some(id) = self.composition_video else {
+                            return;
+                        };
+                        session.edit(
+                            Edit::DeleteVisualClip { clip_id: id },
+                            "Smoke visual delete",
+                        )
+                    }
+                    _ => session.undo(),
+                };
+                if submitted {
+                    self.stage = Stage::Composition {
+                        step,
+                        revision: revision + 1,
+                    };
+                }
+            }
+            Stage::Composition { step, revision } => {
+                let Some(project) = &session.project else {
+                    return;
+                };
+                if project.revision < revision
+                    || session.edit_busy
+                    || session.last_frame.is_none_or(|(r, _)| r != revision)
+                {
+                    return;
+                }
+                let valid = project.revision == revision
+                    && match step {
+                        0 | 1 => project.visual_tracks.len() == usize::from(step) + 1,
+                        2 => {
+                            self.composition_video = project
+                                .visual_clips
+                                .iter()
+                                .find(|c| c.track_id == self.composition_tracks[0])
+                                .map(|c| c.id);
+                            self.composition_video.is_some()
+                        }
+                        3 => project.visual_clips.iter().any(|c| {
+                            Some(c.id) == self.composition_video
+                                && c.duration_frames == 30
+                                && c.at_frame == 10
+                                && c.source
+                                    == lumeryn_core::model::VisualSource::Video {
+                                        source_in_frame: 5,
+                                    }
+                                && c.placement.is_some()
+                        }),
+                        4 => {
+                            self.composition_image = project
+                                .visual_clips
+                                .iter()
+                                .find(|c| c.track_id == self.composition_tracks[1])
+                                .map(|c| c.id);
+                            self.composition_image.is_some()
+                        }
+                        5 => project
+                            .visual_clips
+                            .iter()
+                            .any(|c| Some(c.id) == self.composition_image && c.at_frame == 20),
+                        6 => {
+                            project.visual_clips.len() == 1
+                                && project
+                                    .visual_clips
+                                    .iter()
+                                    .all(|c| Some(c.id) != self.composition_video)
+                        }
+                        _ => {
+                            project.visual_clips.len() == 2
+                                && project.visual_clips.iter().any(|c| {
+                                    Some(c.id) == self.composition_video
+                                        && c.at_frame == 10
+                                        && c.duration_frames == 30
+                                })
+                        }
+                    };
+                if !valid {
+                    self.finish(
+                        session,
+                        false,
+                        Some(format!("Native composition state mismatch at step {step}")),
+                    );
+                    return;
+                }
+                self.check("native_shared_composition_step",json!({"step":step,"revision":revision,"tracks":project.visual_tracks,"placements":project.visual_clips,"presented":session.last_frame}));
+                self.stage = Stage::StartComposition { step: step + 1 };
             }
             Stage::StartAudio { step } => {
                 if step == 8 {

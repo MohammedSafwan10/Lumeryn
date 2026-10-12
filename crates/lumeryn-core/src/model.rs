@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::PathBuf};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAMES: u64 = 1_000_000_000;
+pub const MAX_VISUAL_TRACKS: usize = 2;
+pub const MAX_COMPOSITION_INPUTS: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +26,49 @@ pub struct Project {
     pub clips: Vec<Clip>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio_clips: Vec<AudioClip>,
+    /// Bottom-to-top ordering above the existing primary video track.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_tracks: Vec<VisualTrack>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_clips: Vec<VisualClip>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VisualTrack {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// Source frames belong to moving video only; a still hold has no invented FPS.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VisualSource {
+    Video { source_in_frame: u64 },
+    Image {},
+}
+
+/// A contain-fit rectangle in project canvas pixels, independent of preview resolution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VisualPlacement {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VisualClip {
+    pub id: Uuid,
+    pub media_id: Uuid,
+    pub track_id: Uuid,
+    pub at_frame: u64,
+    pub duration_frames: u64,
+    pub source: VisualSource,
+    /// None contains the source in the complete canvas.
+    pub placement: Option<VisualPlacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -79,6 +124,51 @@ pub struct AudioClip {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
+    AddVisualTrack {
+        id: Uuid,
+        name: String,
+    },
+    ReorderVisualTrack {
+        track_id: Uuid,
+        before_track_id: Option<Uuid>,
+    },
+    DeleteVisualTrack {
+        track_id: Uuid,
+    },
+    AddVisualClip {
+        id: Uuid,
+        media_id: Uuid,
+        track_id: Uuid,
+        at_frame: u64,
+        duration_frames: u64,
+        source: VisualSource,
+        placement: Option<VisualPlacement>,
+    },
+    MoveVisualClip {
+        clip_id: Uuid,
+        track_id: Uuid,
+        at_frame: u64,
+    },
+    SetVisualRange {
+        clip_id: Uuid,
+        at_frame: u64,
+        duration_frames: u64,
+        source: VisualSource,
+    },
+    SetVisualPlacement {
+        clip_id: Uuid,
+        #[serde(deserialize_with = "deserialize_required_placement")]
+        #[schemars(required, schema_with = "nullable_placement_schema")]
+        placement: Option<VisualPlacement>,
+    },
+    DeleteVisualClip {
+        clip_id: Uuid,
+    },
+    /// Free primary-track placement; this never ripples or closes gaps.
+    MoveClip {
+        clip_id: Uuid,
+        at_frame: u64,
+    },
     AddAudioClip {
         id: Uuid,
         media_id: Uuid,
@@ -202,6 +292,19 @@ fn nullable_alias_schema(generator: &mut schemars::SchemaGenerator) -> schemars:
     <Option<String>>::json_schema(generator)
 }
 
+fn deserialize_required_placement<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<VisualPlacement>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<VisualPlacement>::deserialize(deserializer)
+}
+
+fn nullable_placement_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    <Option<VisualPlacement>>::json_schema(generator)
+}
+
 fn default_ripple() -> bool {
     true
 }
@@ -227,6 +330,8 @@ impl Project {
             media: Vec::new(),
             clips: Vec::new(),
             audio_clips: Vec::new(),
+            visual_tracks: Vec::new(),
+            visual_clips: Vec::new(),
         };
         project.validate()?;
         Ok(project)
@@ -241,10 +346,17 @@ impl Project {
         }
         if (self.schema_version == 1
             && (self.audio_track_id.is_some() || !self.audio_clips.is_empty()))
-            || (self.schema_version == SCHEMA_VERSION && self.audio_track_id.is_none())
+            || (self.schema_version >= 2 && self.audio_track_id.is_none())
         {
             return Err(Error::Invalid(
                 "audio track does not match project schema".into(),
+            ));
+        }
+        if self.schema_version < 3
+            && (!self.visual_tracks.is_empty() || !self.visual_clips.is_empty())
+        {
+            return Err(Error::Invalid(
+                "visual composition requires schema 3".into(),
             ));
         }
         if self.name.trim().is_empty()
@@ -270,6 +382,9 @@ impl Project {
             || self.media.iter().any(|m| !ids.insert(m.id))
             || self.clips.iter().any(|c| !ids.insert(c.id))
             || self.audio_clips.iter().any(|c| !ids.insert(c.id))
+            || self.visual_tracks.iter().any(|track| !ids.insert(track.id))
+            || self.visual_clips.iter().any(|clip| !ids.insert(clip.id))
+            || (self.schema_version >= 3 && ids.contains(&Uuid::nil()))
         {
             return Err(Error::Invalid("object IDs must be unique".into()));
         }
@@ -326,6 +441,9 @@ impl Project {
         for clip in &self.audio_clips {
             self.validate_audio_clip(clip)?;
         }
+        if self.schema_version >= 3 {
+            self.validate_visual_composition()?;
+        }
         Ok(())
     }
 
@@ -333,8 +451,196 @@ impl Project {
         self.clips
             .iter()
             .map(|clip| clip.at_frame.saturating_add(clip.duration_frames))
+            .chain(
+                self.visual_clips
+                    .iter()
+                    .map(|clip| clip.at_frame.saturating_add(clip.duration_frames)),
+            )
             .max()
             .unwrap_or(0)
+    }
+
+    /// The bounded reference compositor is required for overlays or primary-track gaps.
+    pub fn uses_composition(&self) -> bool {
+        if !self.visual_clips.is_empty() {
+            return true;
+        }
+        let mut clips = self.clips.iter().collect::<Vec<_>>();
+        clips.sort_by_key(|clip| clip.at_frame);
+        let mut expected = 0;
+        for clip in clips {
+            if clip.at_frame != expected {
+                return true;
+            }
+            expected = clip.at_frame.saturating_add(clip.duration_frames);
+        }
+        false
+    }
+
+    fn validate_visual_composition(&self) -> Result<()> {
+        if self.visual_tracks.len() > MAX_VISUAL_TRACKS {
+            return Err(Error::Unsupported(
+                "composition supports at most two additional visual tracks".into(),
+            ));
+        }
+        for track in &self.visual_tracks {
+            if track.name.trim().is_empty()
+                || track.name.len() > 256
+                || track.name.chars().any(char::is_control)
+            {
+                return Err(Error::Invalid("visual track name must be nonblank, at most 256 UTF-8 bytes and free of control characters".into()));
+            }
+        }
+        let mut spans = self
+            .clips
+            .iter()
+            .map(|clip| {
+                (
+                    clip.track_id,
+                    clip.at_frame,
+                    clip.at_frame + clip.duration_frames,
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+        for clip in &self.visual_clips {
+            self.visual_track_index(clip.track_id)?;
+            let end = clip
+                .at_frame
+                .checked_add(clip.duration_frames)
+                .filter(|end| clip.duration_frames > 0 && *end <= MAX_FRAMES)
+                .ok_or_else(|| Error::Invalid("invalid visual clip timeline range".into()))?;
+            if clip.placement.as_ref().is_some_and(|placement| {
+                !(-8192..=8192).contains(&placement.x)
+                    || !(-8192..=8192).contains(&placement.y)
+                    || !(1..=3840).contains(&placement.width)
+                    || !(1..=3840).contains(&placement.height)
+            }) {
+                return Err(Error::Invalid("visual placement requires x/y within +/-8192 and width/height within 1..3840 canvas pixels".into()));
+            }
+            let media = self
+                .media
+                .iter()
+                .find(|media| media.id == clip.media_id)
+                .ok_or_else(|| Error::NotFound(format!("media {}", clip.media_id)))?;
+            let video = media.metadata.video.as_ref().ok_or_else(|| {
+                Error::Unsupported("visual placement requires verified video or PNG".into())
+            })?;
+            if media.metadata.blake3.is_none()
+                || video.start_time_micros != 0
+                || video.sample_aspect_ratio != "1:1"
+            {
+                return Err(Error::Unsupported("visual placement requires hashed zero-origin square-pixel source; reimport media".into()));
+            }
+            match &clip.source {
+                VisualSource::Video { source_in_frame } => {
+                    if video.codec == "png"
+                        || !video.constant_rate
+                        || video.frame_rate != self.frame_rate
+                    {
+                        return Err(Error::Unsupported("moving visual placement requires matching CFR video; use image holds for PNG".into()));
+                    }
+                    if source_in_frame
+                        .checked_add(clip.duration_frames)
+                        .is_none_or(|end| end > video.frames)
+                    {
+                        return Err(Error::Invalid(
+                            "visual video range exceeds verified source frames".into(),
+                        ));
+                    }
+                }
+                VisualSource::Image {} => {
+                    if video.codec != "png" || video.frames != 1 || media.metadata.audio.is_some() {
+                        return Err(Error::Unsupported(
+                            "image hold requires a verified single-frame silent PNG".into(),
+                        ));
+                    }
+                }
+            }
+            spans.push((
+                clip.track_id,
+                clip.at_frame,
+                end,
+                matches!(clip.source, VisualSource::Image {}),
+            ));
+        }
+        spans.sort_by_key(|(track, start, _, _)| (*track, *start));
+        if spans
+            .windows(2)
+            .any(|pair| pair[0].0 == pair[1].0 && pair[0].2 > pair[1].1)
+        {
+            return Err(Error::Invalid(
+                "visual clips must not overlap on the same track; move to another track".into(),
+            ));
+        }
+        if self.uses_composition() {
+            if spans.len() > MAX_COMPOSITION_INPUTS {
+                return Err(Error::Unsupported(
+                    "initial composition supports at most three total primary/overlay placements"
+                        .into(),
+                ));
+            }
+            for media_id in self
+                .clips
+                .iter()
+                .map(|clip| clip.media_id)
+                .chain(self.visual_clips.iter().map(|clip| clip.media_id))
+            {
+                let media = self
+                    .media
+                    .iter()
+                    .find(|media| media.id == media_id)
+                    .ok_or_else(|| Error::NotFound(format!("media {media_id}")))?;
+                let video = media
+                    .metadata
+                    .video
+                    .as_ref()
+                    .ok_or_else(|| Error::Invalid("missing visual video metadata".into()))?;
+                if video.width > 3840 || video.height > 3840 || media.metadata.blake3.is_none() {
+                    return Err(Error::Unsupported(
+                        "composition requires hashed sources with each dimension at most 3840"
+                            .into(),
+                    ));
+                }
+                if video.start_time_micros != 0
+                    || video.sample_aspect_ratio != "1:1"
+                    || video
+                        .color_transfer
+                        .as_deref()
+                        .is_some_and(|transfer| matches!(transfer, "smpte2084" | "arib-std-b67"))
+                    || media
+                        .metadata
+                        .audio
+                        .as_ref()
+                        .is_some_and(|audio| audio.start_time_micros != 0)
+                {
+                    return Err(Error::Unsupported(
+                        "composition requires zero-origin square-pixel SDR sources".into(),
+                    ));
+                }
+            }
+            // Half-open intervals: endpoints are processed before starts at the same frame.
+            let mut events = spans
+                .iter()
+                .flat_map(|(_, start, end, image)| {
+                    [(*start, 1_i32, *image), (*end, -1_i32, *image)]
+                })
+                .collect::<Vec<_>>();
+            events.sort_by_key(|(frame, delta, _)| (*frame, *delta));
+            let mut videos = 0;
+            let mut images = 0;
+            for (_, delta, image) in events {
+                if image {
+                    images += delta;
+                } else {
+                    videos += delta;
+                }
+                if videos > 2 || images > 1 {
+                    return Err(Error::Unsupported("composition supports at most two moving sources and one PNG hold simultaneously".into()));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn validate_audio_clip(&self, clip: &AudioClip) -> Result<()> {
@@ -434,6 +740,99 @@ impl Project {
             ));
         }
         match operation {
+            Edit::AddVisualTrack { id, name } => {
+                self.visual_tracks.push(VisualTrack {
+                    id: *id,
+                    name: name.clone(),
+                });
+            }
+            Edit::ReorderVisualTrack {
+                track_id,
+                before_track_id,
+            } => {
+                let index = self.visual_track_index(*track_id)?;
+                if let Some(before) = before_track_id {
+                    self.visual_track_index(*before)?;
+                    if before == track_id {
+                        return Err(Error::Invalid(
+                            "cannot reorder a visual track before itself".into(),
+                        ));
+                    }
+                }
+                let track = self.visual_tracks.remove(index);
+                let target = match before_track_id {
+                    Some(before) => self.visual_track_index(*before)?,
+                    None => self.visual_tracks.len(),
+                };
+                self.visual_tracks.insert(target, track);
+            }
+            Edit::DeleteVisualTrack { track_id } => {
+                let index = self.visual_track_index(*track_id)?;
+                if self
+                    .visual_clips
+                    .iter()
+                    .any(|clip| clip.track_id == *track_id)
+                {
+                    return Err(Error::Invalid(
+                        "remove or move visual clips before deleting their track".into(),
+                    ));
+                }
+                self.visual_tracks.remove(index);
+            }
+            Edit::AddVisualClip {
+                id,
+                media_id,
+                track_id,
+                at_frame,
+                duration_frames,
+                source,
+                placement,
+            } => {
+                self.visual_clips.push(VisualClip {
+                    id: *id,
+                    media_id: *media_id,
+                    track_id: *track_id,
+                    at_frame: *at_frame,
+                    duration_frames: *duration_frames,
+                    source: source.clone(),
+                    placement: placement.clone(),
+                });
+            }
+            Edit::MoveVisualClip {
+                clip_id,
+                track_id,
+                at_frame,
+            } => {
+                let clip = self.visual_clip_mut(*clip_id)?;
+                clip.track_id = *track_id;
+                clip.at_frame = *at_frame;
+            }
+            Edit::SetVisualRange {
+                clip_id,
+                at_frame,
+                duration_frames,
+                source,
+            } => {
+                let clip = self.visual_clip_mut(*clip_id)?;
+                clip.at_frame = *at_frame;
+                clip.duration_frames = *duration_frames;
+                clip.source = source.clone();
+            }
+            Edit::SetVisualPlacement { clip_id, placement } => {
+                self.visual_clip_mut(*clip_id)?.placement = placement.clone();
+            }
+            Edit::DeleteVisualClip { clip_id } => {
+                let index = self
+                    .visual_clips
+                    .iter()
+                    .position(|clip| clip.id == *clip_id)
+                    .ok_or_else(|| Error::NotFound(format!("visual clip {clip_id}")))?;
+                self.visual_clips.remove(index);
+            }
+            Edit::MoveClip { clip_id, at_frame } => {
+                let index = self.clip_index(*clip_id)?;
+                self.clips[index].at_frame = *at_frame;
+            }
             Edit::AddAudioClip {
                 id,
                 media_id,
@@ -521,6 +920,12 @@ impl Project {
                 let usage_count = usage_count
                     + self
                         .audio_clips
+                        .iter()
+                        .filter(|clip| clip.media_id == *media_id)
+                        .count();
+                let usage_count = usage_count
+                    + self
+                        .visual_clips
                         .iter()
                         .filter(|clip| clip.media_id == *media_id)
                         .count();
@@ -657,7 +1062,9 @@ impl Project {
             }
             Edit::SetFrameRate { frame_rate } => {
                 if self.frame_rate != *frame_rate
-                    && (!self.clips.is_empty() || !self.audio_clips.is_empty())
+                    && (!self.clips.is_empty()
+                        || !self.audio_clips.is_empty()
+                        || !self.visual_clips.is_empty())
                 {
                     return Err(Error::Unsupported(
                         "timeline frame rate is locked while video or audio clips are placed; choose it before editing".into(),
@@ -687,6 +1094,20 @@ impl Project {
             .iter()
             .position(|clip| clip.id == id)
             .ok_or_else(|| Error::NotFound(format!("clip {id}")))
+    }
+
+    fn visual_track_index(&self, id: Uuid) -> Result<usize> {
+        self.visual_tracks
+            .iter()
+            .position(|track| track.id == id)
+            .ok_or_else(|| Error::NotFound(format!("visual track {id}")))
+    }
+
+    fn visual_clip_mut(&mut self, id: Uuid) -> Result<&mut VisualClip> {
+        self.visual_clips
+            .iter_mut()
+            .find(|clip| clip.id == id)
+            .ok_or_else(|| Error::NotFound(format!("visual clip {id}")))
     }
 
     fn audio_clip_mut(&mut self, id: Uuid) -> Result<&mut AudioClip> {

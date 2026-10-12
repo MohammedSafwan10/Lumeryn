@@ -5,6 +5,25 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
+    DropVisual {
+        payload: DragPayload,
+        track_id: Uuid,
+        at_frame: u64,
+    },
+    MovePrimary {
+        clip_id: Uuid,
+        at_frame: u64,
+    },
+    TrimVisual {
+        clip_id: Uuid,
+        duration: u64,
+    },
+    DeleteVisual(Uuid),
+    ReorderVisualTrack {
+        track_id: Uuid,
+        before: Option<Uuid>,
+    },
+    DeleteVisualTrack(Uuid),
     Select(Uuid),
     Seek(u64),
     Trim {
@@ -40,6 +59,7 @@ pub enum Action {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragSource {
+    VisualClip { clip: Uuid, grab_offset: u64 },
     Media(Uuid),
     Clip(Uuid),
     AudioClip { clip: Uuid, grab_offset: u64 },
@@ -99,6 +119,7 @@ fn snap_audio_frame(project: &Project, frame: u64, playhead: u64, px: f32) -> u6
 
 #[derive(Debug)]
 pub struct Timeline {
+    pub(crate) visual_trim: Option<crate::composition_timeline::VisualTrim>,
     pub zoom: f32,
     pub fit: bool,
     trim: Option<TrimGesture>,
@@ -124,6 +145,7 @@ impl TrimGesture {
 impl Default for Timeline {
     fn default() -> Self {
         Self {
+            visual_trim: None,
             zoom: 1.0,
             fit: true,
             trim: None,
@@ -134,12 +156,7 @@ impl Default for Timeline {
 }
 
 pub fn total_frames(project: &Project) -> u64 {
-    project
-        .clips
-        .iter()
-        .map(|clip| clip.at_frame.saturating_add(clip.duration_frames))
-        .max()
-        .unwrap_or(0)
+    project.visual_duration_frames()
 }
 
 pub fn visible(clip: &Clip, first: u64, last: u64) -> bool {
@@ -151,7 +168,7 @@ fn frame_at(x: f32, origin: f32, px: f32, maximum: u64) -> u64 {
 }
 
 /// Elapsed timeline time, not SMPTE drop-frame notation. Integer conversion retains rational rates.
-fn timecode(frame: u64, rate: FrameRate, fractions: bool) -> String {
+pub(crate) fn timecode(frame: u64, rate: FrameRate, fractions: bool) -> String {
     let millis =
         u128::from(frame) * u128::from(rate.denominator()) * 1000 / u128::from(rate.numerator());
     let seconds = millis / 1000;
@@ -167,7 +184,7 @@ fn timecode(frame: u64, rate: FrameRate, fractions: bool) -> String {
     }
 }
 
-fn nice_tick_frames(rate: FrameRate, px_per_frame: f32) -> u64 {
+pub(crate) fn nice_tick_frames(rate: FrameRate, px_per_frame: f32) -> u64 {
     let fps = f64::from(rate.numerator()) / f64::from(rate.denominator());
     let seconds = [
         0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0,
@@ -261,6 +278,7 @@ impl Lanes {
 
 impl Timeline {
     pub fn cancel_gesture(&mut self) {
+        self.visual_trim = None;
         self.trim = None;
         self.audio_trim = None;
     }
@@ -271,6 +289,9 @@ impl Timeline {
         assets: &Assets,
         view: View,
     ) -> Vec<Action> {
+        if !project.visual_tracks.is_empty() || project.uses_composition() {
+            return crate::composition_timeline::show(self, ui, project, assets, view);
+        }
         let View {
             selected,
             playhead,
@@ -562,7 +583,7 @@ impl Timeline {
                     let music_zone=music.map(|rect|rect.intersect(viewport));
                     if let Some(zone)=music_zone && zone.contains(pointer) && ui.ctx().layer_id_at(pointer)==Some(ui.layer_id()) {
                         let stale=payload.project!=project.id || payload.revision!=project.revision || payload.epoch!=epoch;
-                        let accepted=match payload.source {DragSource::Media(id)=>project.media.iter().any(|media|media.id==id && media.metadata.audio.is_some()),DragSource::AudioClip {clip,..}=>project.audio_clips.iter().any(|item|item.id==clip),DragSource::Clip(_)=>false};
+                        let accepted=match payload.source {DragSource::Media(id)=>project.media.iter().any(|media|media.id==id && media.metadata.audio.is_some()),DragSource::AudioClip {clip,..}=>project.audio_clips.iter().any(|item|item.id==clip),DragSource::Clip(_)|DragSource::VisualClip {..}=>false};
                         let raw=((pointer.x-origin)/pixels_per_frame).round().max(0.0) as u64;
                         let offset=match payload.source {DragSource::AudioClip {grab_offset,..}=>grab_offset,_=>0};
                         let maximum=match payload.source {DragSource::AudioClip {clip,..}=>project.audio_clips.iter().find(|item|item.id==clip).map_or(0,|item|total.saturating_sub(item.duration_frames)),_=>total.saturating_sub(1)};
@@ -584,7 +605,7 @@ impl Timeline {
                     let over_linked = linked_zone.contains(pointer);
                     if (over_video || over_linked) && ui.ctx().layer_id_at(pointer) == Some(ui.layer_id()) {
                         let stale = payload.project != project.id || payload.revision != project.revision || payload.epoch != epoch;
-                        let playable = match payload.source { DragSource::Media(id) => project.media.iter().any(|media| media.id == id && media.metadata.video.is_some()), DragSource::Clip(id) => project.clips.iter().any(|clip| clip.id == id), DragSource::AudioClip {..}=>false };
+                        let playable = match payload.source { DragSource::Media(id) => project.media.iter().any(|media| media.id == id && media.metadata.video.is_some()), DragSource::Clip(id) => project.clips.iter().any(|clip| clip.id == id), DragSource::AudioClip {..}|DragSource::VisualClip {..}=>false };
                         let error = if stale {Some("The project changed during this drag. Drag again from the current project.")} else if !editable {Some("Wait for the current edit or connection before dropping.")} else if !playable {Some("Drop audio on Audio 1; upgrade legacy projects from the Project panel.")} else if over_linked && matches!(payload.source,DragSource::Media(_)) {Some("Drop video on the Video 1 lane. This waveform lane is linked source audio.")} else {None};
                         if let Some(error) = error {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
@@ -637,6 +658,7 @@ impl Timeline {
             let over_video = lanes.video.contains(pointer);
             let over_linked = lanes.audio.contains(pointer);
             let accepts = match payload.source {
+                DragSource::VisualClip { .. } => false,
                 DragSource::Media(id) => {
                     (over_video
                         && project

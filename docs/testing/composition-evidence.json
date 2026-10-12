@@ -1,0 +1,76 @@
+{
+  "date": "2026-10-12",
+  "scope": "bounded schema3 composition",
+  "full_gate": {
+    "distinct_test_names": 225,
+    "default": 171,
+    "additional_media": 54,
+    "log": ".lumeryn-scratch/composition-full-gate11.log"
+  },
+  "native": {
+    "artifact_directory": ".lumeryn-scratch/studio-02622dd60b2a435bbe5d4259dd96c270",
+    "passed": true,
+    "checks": 21,
+    "composition_steps": 8,
+    "revision": 19,
+    "export": {
+      "duration_seconds": 5.666666666666667,
+      "encoder": "h264_nvenc",
+      "fallback_reason": null,
+      "frame_rate": "60/1",
+      "frames": 340,
+      "hardware": true,
+      "height": 2160,
+      "options": {
+        "acceleration": "auto",
+        "bitrate_kbps": null,
+        "codec": "h264",
+        "fps": 60,
+        "quality": "balanced",
+        "resolution": "uhd2160"
+      },
+      "path": "\\\\?\\D:\\Dev\\freela\\Lumeryn\\.lumeryn-scratch\\studio-02622dd60b2a435bbe5d4259dd96c270\\studio-smoke-export.mp4",
+      "preset": "h264-aac",
+      "project_revision": 19,
+      "upscaled": true,
+      "verified_full_decode": true,
+      "width": 3840
+    },
+    "ui_update_p50_ms": 4.3394,
+    "ui_update_p95_ms": 8.178899999999999,
+    "sampled_studio_peak_ram_bytes": 292134912,
+    "binary_hashes": {
+      "cli_sha256": "F98B89E59326ABF3186430F8D605A18326521B51686659074003EE2C9AEEA3DD",
+      "studio_sha256": "6A5B17E06D2F3A160EF16598F6B3DEDEFF3735DDC9E986DC9C2009BD06D709DB"
+    },
+    "assets": {
+      "complete": true,
+      "failed_assets": 0,
+      "thumbnails": 3,
+      "waveforms": 2
+    }
+  },
+  "captures": ".lumeryn-scratch/composition-captures-d8712b169fdb4e6a961a45a04a426d36",
+  "limits": [
+    "synthetic 720p source upscaled in native export; separate actual UHD resolution/pixel tests passed",
+    "CPU UI update time is not display or input latency",
+    "sampled Studio RAM excludes FFmpeg worker peaks; global GPU counters are not app VRAM",
+    "physical pointer/DPI/device/display A/V, long-duration drift and sustained UHD untested"
+  ],
+  "final_compact_capture": ".lumeryn-scratch/composition-final-capture-60c37117417b47c0b9250dae1112c1d7",
+  "windows_launch": {
+    "bounded_eof": ".lumeryn-scratch/studio-launch-bounded-eof-20261012.json",
+    "no_console_probe": ".lumeryn-scratch/worker-console-de28380d1afb49c58ca84cba1e44d87d/evidence.json",
+    "normal_build_receipt": ".lumeryn-scratch/studio-owner-console-fixed.json",
+    "owner_confirmed_editor_before_worker_fix": true,
+    "owner_confirmed_no_popups_after_worker_fix": true,
+    "observation": "Updated GUI running; console-host window handles zero; no WindowsTerminal/OpenConsole processes observed. Owner confirmed no extra terminals.",
+    "owner_feedback": "Yes, no extra terminals",
+    "final_layout_receipt": ".lumeryn-scratch/studio-owner-final-layout.json"
+  },
+  "media_footer_captures": ".lumeryn-scratch/media-footer-captures-2cf2b6bb9df2404c8e1bf7d8320e44a4",
+  "media_footer_checks": [
+    "scrollable_media_keeps_both_footer_actions_inside_short_drawers",
+    "real_media_panel_drags_png_video_and_audio_only_when_editable"
+  ]
+}

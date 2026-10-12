@@ -280,7 +280,7 @@ impl Library {
         if stop_requested {
             self.stop_audition();
         }
-        ui.label(RichText::new("Import to My media, then drag sounds onto Audio 1. Image timeline placement is coming soon.").small().color(crate::design::MUTED));
+        ui.label(RichText::new("Import to My media, then drag sounds onto Audio 1. Create a layer in My media to place an imported PNG.").small().color(crate::design::MUTED));
         ui.add_space(8.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])

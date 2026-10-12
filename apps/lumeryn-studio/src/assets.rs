@@ -1,7 +1,7 @@
 //! Disposable, bounded presentation cache. Asset decoding never runs on the UI thread.
 use lumeryn_core::{
     Error, MediaTools, Project, Result,
-    media::{content_hash, local_file},
+    media::{async_worker_command, content_hash, local_file},
     model::Media,
 };
 use std::{
@@ -13,7 +13,6 @@ use std::{
 };
 use tokio::{
     io::AsyncReadExt,
-    process::Command,
     sync::{mpsc, watch},
 };
 use uuid::Uuid;
@@ -472,7 +471,7 @@ async fn waveform(path: &Path, tools: &MediaTools) -> Result<Waveform> {
         "f32le".into(),
         "pipe:1".into(),
     ]);
-    let mut child = Command::new(&tools.ffmpeg)
+    let mut child = async_worker_command(&tools.ffmpeg)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -1,9 +1,12 @@
 use crate::{PreviewFrame, plan::Plan};
-use lumeryn_core::{Error, MediaTools, Result, media::content_hash};
+use lumeryn_core::{
+    Error, MediaTools, Result,
+    media::{async_worker_command, content_hash},
+};
 use std::{ffi::OsString, process::Stdio, sync::Arc, time::Instant};
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
-    process::{Child, Command},
+    process::Child,
     sync::{mpsc, watch},
     task::JoinHandle,
 };
@@ -16,7 +19,7 @@ pub(crate) struct WorkerPipe {
 
 impl WorkerPipe {
     pub fn start(tools: &MediaTools, args: &[OsString]) -> Result<Self> {
-        let mut child = Command::new(&tools.ffmpeg)
+        let mut child = async_worker_command(&tools.ffmpeg)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -95,6 +98,43 @@ pub(crate) async fn video(
     mut cancel: watch::Receiver<u64>,
 ) {
     let result = async {
+        if let Some(visual) = &plan.visual_plan {
+            visual.verify_sources().await?;
+            let program = lumeryn_core::visual_backend::lower(visual, plan.width, plan.height)?;
+            let mut args = base_args();
+            args.extend(["-filter_complex_threads".into(), "2".into()]);
+            args.extend(program.input_args);
+            args.extend(["-filter_complex".into(), format!("{};[{}]trim=start_frame={start}:end_frame={},setpts=PTS-STARTPTS,format=rgba[lumeryn_preview_rgba]", program.filters, program.output_label, plan.total).into(), "-map".into(), "[lumeryn_preview_rgba]".into(), "-an".into(), "-threads".into(), "2".into(), "-fps_mode".into(), "passthrough".into(), "-f".into(), "rawvideo".into(), "pipe:1".into()]);
+            // One bounded composite queue/process for this generation. Seeking trims
+            // the reference output from the origin; measured fast seeking is staged.
+            let mut pipe = WorkerPipe::start(&tools, &args)?;
+            for frame_index in start..plan.total {
+                let started = Instant::now();
+                let mut rgba = vec![0_u8; plan.width as usize * plan.height as usize * 4];
+                tokio::time::timeout(tools.timeout, pipe.stdout.read_exact(&mut rgba))
+                    .await
+                    .map_err(|_| Error::Timeout)??;
+                output
+                    .send(Ok(PreviewFrame {
+                        rgba: Arc::from(rgba),
+                        width: plan.width,
+                        height: plan.height,
+                        frame_index,
+                        generation,
+                        project_revision: plan.revision,
+                        pts_numerator: frame_index * u64::from(plan.rate.denominator()),
+                        pts_denominator: plan.rate.numerator(),
+                        decode_time_ms: started.elapsed().as_secs_f64() * 1000.0,
+                    }))
+                    .await
+                    .map_err(|_| Error::Media("preview consumer closed".into()))?;
+            }
+            tokio::time::timeout(tools.timeout, pipe.finish())
+                .await
+                .map_err(|_| Error::Timeout)??;
+            visual.verify_sources().await?;
+            return Ok::<_, Error>(());
+        }
         for segment in plan.segments.iter().filter(|s| s.at + s.frames > start) {
             let offset = start.saturating_sub(segment.at);
             if content_hash(&segment.path).await? != segment.digest {

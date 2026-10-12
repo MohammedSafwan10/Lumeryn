@@ -203,6 +203,18 @@ impl AudioPlan {
         let mut clips = project.clips.iter().collect::<Vec<_>>();
         clips.sort_by_key(|clip| clip.at_frame);
         let contributions = project.audio_clips.len()
+            + project
+                .visual_clips
+                .iter()
+                .filter(|clip| {
+                    matches!(clip.source, crate::model::VisualSource::Video { .. })
+                        && project
+                            .media
+                            .iter()
+                            .find(|media| media.id == clip.media_id)
+                            .is_some_and(|media| media.metadata.audio.is_some())
+                })
+                .count()
             + clips
                 .iter()
                 .filter(|clip| {
@@ -235,6 +247,27 @@ impl AudioPlan {
                     muted: false,
                 });
                 embedded_padding.push(true);
+            }
+        }
+        for clip in &project.visual_clips {
+            if let crate::model::VisualSource::Video { source_in_frame } = clip.source {
+                let media = project
+                    .media
+                    .iter()
+                    .find(|media| media.id == clip.media_id)
+                    .ok_or_else(|| Error::NotFound("visual audio source".into()))?;
+                if media.metadata.audio.is_some() {
+                    sources.push(project_source(media, parent)?);
+                    segments.push(AudioSegment {
+                        source: sources.len() - 1,
+                        at_frame: clip.at_frame,
+                        source_in_sample: sample_boundary(project.frame_rate, source_in_frame)?,
+                        duration_frames: clip.duration_frames,
+                        gain_millidecibels: 0,
+                        muted: false,
+                    });
+                    embedded_padding.push(true);
+                }
             }
         }
         for clip in &project.audio_clips {
