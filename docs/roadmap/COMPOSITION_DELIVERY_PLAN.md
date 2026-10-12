@@ -1,6 +1,6 @@
 # Composition delivery plan
 
-Date: 2026-10-10. Owner authorizes planning and implementation of layers/gaps/images/transforms, editable text/vectors/animation/templates, colour/effects/fades, and transitions/speed/freeze. Status: V0 and bounded V1 implemented; integrated acceptance in progress. V2–V7 remain staged. This extends the current editor, not a restart. [TASKS](../../TASKS.md) tracks execution; [ADR0023](../adr/0023-shared-visual-composition.md) records architecture.
+Date: 2026-10-10. Owner authorizes planning and implementation of layers/gaps/images/transforms, editable text/vectors/animation/templates, colour/effects/fades, and transitions/speed/freeze. Status: V0 and bounded V1 implemented and verified;225distinct tests and21actual native checks passed. V2â€“V7 remain staged. This extends the current editor, not a restart. [TASKS](../../TASKS.md) tracks execution; [ADR0023](../adr/0023-shared-visual-composition.md) records architecture.
 
 ## Product outcome and boundaries
 
@@ -81,7 +81,7 @@ Record cold/warm startup, seek-to-present p50/p95, sustained playback/drop/under
 
 Research specialists completed separate reports; root owns this plan/ADR/UI contract. For implementation assign one graph/storage owner, one shared evaluation/backend owner, and one client/verification owner after contracts merge. Avoid parallel edits of model.rs, storage.rs, render.rs or AudioPlan. Typography/effect experiments can own isolated modules/tests and report back; no speculative crate extraction.
 
-Next: implement V0 checked offgraph VisualPlan and source-time/active-interval tests, prove the shared reference in preview-frame and export adapters, then deliver V1 on disposable projects. Do not increment schema or advertise layered editing before that gate. The current owner project and running Studio remain untouched by planning/fixtures.
+V0 and bounded V1 are implemented and verified; the final integrated gate passed225distinct tests and the actual native layer/UHD workflow passed21checks. Next implement V2 crop/cover/rotation/flip/opacity and direct canvas manipulation through the shared plan, with source-bound pixel fixtures and CLI/native/export parity. Then prioritize V3 editable titles/shapes and V4 keyframes/explainers. The current owner project remains explicit and is never automatically migrated or reset.
 
 ## V1 scope adjustment and next executable milestone
 
@@ -91,4 +91,4 @@ V1 includes precise contain position/size and a corner PIP preset earlier than V
 
 ## Owner launch feedback checkpoint
 
-Before further creative features, fix the confirmed Windows launch defects: GUI subsystem in debug/release, agent-safe no-handle-inheritance Studio spawning with OS visibility observations, and console-free media workers across preview/import/render. These share existing process/service boundaries; no embedded runtime/installer/second graph is introduced. Existing zero-project Welcome/Open/New remains. Owner projects and unfinished UI edits must survive rollout; an older running GUI/service only receives the correction after an owner-controlled refresh. Passing framebuffer captures alone cannot certify a foreground physical display.
+Completed before further creative features: GUI subsystem in debug/release, agent-safe no-handle-inheritance Studio spawning with OS visibility observations, and console-free media workers across preview/import/render. The owner confirmed no extra terminals after rollout. Responsive media actions and actual PNG source-card dragging are also verified. These share existing process/service boundaries; no embedded runtime/installer/second graph is introduced. Existing zero-project Welcome/Open/New remains. Passing framebuffer captures alone cannot certify a foreground physical display; evidence and remaining manual checks are in STUDIO_LAUNCH and COMPOSITION_ACCEPTANCE.
