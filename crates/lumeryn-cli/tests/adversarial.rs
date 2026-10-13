@@ -330,8 +330,20 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
     let variants = schema["$defs"]["Edit"]["oneOf"]
         .as_array()
         .ok_or("missing operation variants")?;
-    assert_eq!(variants.len(), 30);
+    assert_eq!(variants.len(), 43);
     for example in [
+        json!({"operation":"set_time_effect","clip_id":"00000000-0000-4000-8000-000000000006","effect":{"kind":"normal"}}),
+        json!({"operation":"set_transition","id":"00000000-0000-4000-8000-000000000008","outgoing_clip_id":"00000000-0000-4000-8000-000000000006","incoming_clip_id":"00000000-0000-4000-8000-000000000007","kind":"cross_dissolve","duration_frames":10}),
+        json!({"operation":"delete_transition","transition_id":"00000000-0000-4000-8000-000000000008"}),
+        json!({"operation":"set_visual_animation","clip_id":"00000000-0000-4000-8000-000000000006","animation":{"channels":[]}}),
+        json!({"operation":"set_visual_effects","clip_id":"00000000-0000-4000-8000-000000000006","effects":{"version":1,"exposure_millistops":100,"contrast_basis_points":10800,"saturation_basis_points":11200,"temperature_basis_points":1800,"fades":{"in_frames":5,"out_frames":5}}}),
+        json!({"operation":"create_scene","id":"00000000-0000-4000-8000-000000000007","name":"Title","document":{"width":320,"height":180,"nodes":[]}}),
+        json!({"operation":"set_scene","scene_id":"00000000-0000-4000-8000-000000000007","document":{"width":320,"height":180,"nodes":[]}}),
+        json!({"operation":"add_scene_placement","id":"00000000-0000-4000-8000-000000000008","scene_id":"00000000-0000-4000-8000-000000000007","track_id":"00000000-0000-4000-8000-000000000005","at_frame":0,"duration_frames":30}),
+        json!({"operation":"set_scene_range","clip_id":"00000000-0000-4000-8000-000000000008","at_frame":10,"duration_frames":20}),
+        json!({"operation":"move_scene_placement","clip_id":"00000000-0000-4000-8000-000000000008","track_id":"00000000-0000-4000-8000-000000000005","at_frame":20}),
+        json!({"operation":"delete_scene_placement","clip_id":"00000000-0000-4000-8000-000000000008"}),
+        json!({"operation":"delete_scene","scene_id":"00000000-0000-4000-8000-000000000007"}),
         json!({"operation":"import","id":"00000000-0000-4000-8000-000000000001","path":"source.mp4"}),
         json!({"operation":"rename_media","media_id":"00000000-0000-4000-8000-000000000001","alias":"Opening shot"}),
         json!({"operation":"remove_media","media_id":"00000000-0000-4000-8000-000000000001"}),
@@ -355,6 +367,7 @@ fn schema_operation_contract_matches_shared_command_types() -> TestResult {
         json!({"operation":"move_visual_clip","clip_id":"00000000-0000-4000-8000-000000000006","track_id":"00000000-0000-4000-8000-000000000005","at_frame":10}),
         json!({"operation":"set_visual_range","clip_id":"00000000-0000-4000-8000-000000000006","at_frame":0,"duration_frames":20,"source":{"kind":"video","source_in_frame":10}}),
         json!({"operation":"set_visual_placement","clip_id":"00000000-0000-4000-8000-000000000006","placement":null}),
+        json!({"operation":"set_visual_transform","clip_id":"00000000-0000-4000-8000-000000000006","transform":{"crop":null,"fit":"contain","rotation_millidegrees":90000,"pivot_x_basis_points":5000,"pivot_y_basis_points":5000,"flip_horizontal":true,"flip_vertical":false,"opacity_basis_points":7500}}),
         json!({"operation":"delete_visual_clip","clip_id":"00000000-0000-4000-8000-000000000006"}),
         json!({"operation":"move_clip","clip_id":"00000000-0000-4000-8000-000000000002","at_frame":10}),
         json!({"operation":"set_canvas","width":2160,"height":3840}),

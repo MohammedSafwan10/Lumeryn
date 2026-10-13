@@ -70,6 +70,12 @@ async fn picture(
         duration_frames,
         layer,
         rect,
+        source_width: 128,
+        source_height: 72,
+        transform: Default::default(),
+        effects: Default::default(),
+        animation: Default::default(),
+        time_effect: Default::default(),
     })
 }
 fn pixel(bytes: &[u8], frame: usize, x: usize, y: usize) -> &[u8] {

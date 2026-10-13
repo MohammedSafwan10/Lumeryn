@@ -386,7 +386,7 @@ async fn run(
                         pending_start = 0; loading_generation = g;
                         if let Some(task) = building.take() { task.abort(); }
                         update(&status, |s| { *s = PreviewStatus {generation:g,project_revision:project.revision,..Default::default()}; });
-                        if project.clips.is_empty() && project.visual_clips.is_empty() {
+                        if project.visual_duration_frames() == 0 {
                             // Empty editing projects are ordinary idle state, but still
                             // validate all graph invariants before accepting them.
                             if let Err(error) = project.validate() {update(&status, |s| s.error = Some(error.to_string()));}

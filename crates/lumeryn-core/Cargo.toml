@@ -17,3 +17,5 @@ tempfile.workspace = true
 schemars.workspace = true
 blake3.workspace = true
 sha2 = "=0.10.9"
+parley.workspace = true
+swash.workspace = true

@@ -27,6 +27,7 @@ pub enum CaptureState {
     Export,
     Inspector,
     Visual,
+    Scenes,
     Audio,
     Project,
     Importing,

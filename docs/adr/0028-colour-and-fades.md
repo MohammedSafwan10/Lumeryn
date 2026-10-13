@@ -1,0 +1,17 @@
+# ADR 0028: encoded-SDR colour and clip-local fades
+
+Date: 2026-10-12. Status: isolated reference candidate; integrated storage/CLI/native/output gates required before shipping.
+
+Keep the authoritative Rust graph and shared FFmpeg preview/export lowering. Version1 stores fixed-point exposure, contrast, saturation, artistic temperature and integer project-frame fades. Transform owns static opacity; effects preserve that alpha and apply a separate envelope. Normal composition only; not HDR, linear-light grading, calibrated Kelvin or mastering.
+
+Appearance order: spatial transform/static opacity -> encoded-RGB exposure/contrast around127.5 and per-channel clamp -> Rec.709-weighted saturation and per-channel clamp -> red/blue balance and per-channel clamp -> alpha fade -> timeline offset -> Normal overlay. Generated lutrgb/colorchannelmixer/nativefade parameters accept numbers only; no caller filter expressions/LUT paths. Temperature is a separate LUT because maximum saturation plus temperature can exceed colorchannelmixer's +/-2 coefficient limit when fused. Identity bypasses filtering, Default resets. Warm Story, Cool Clarity, Soft Mono are original inspectable numeric recipes, no copied Clipchamp assets.
+
+Fades use half-open clip intervals. Incoming is zero at start, one at its fade endpoint; outgoing reaches zero at excluded end, so last active frame/sample need not be zero. Overlap rejected. Native visual fade=alpha=1 uses rational seconds generated from exact rate, evaluated at actual output timestamps before composition. FFmpeg duration/timebase adapters have microsecond precision (at most1 microsecond); fractional-rate alpha goldens allow one alpha-code tolerance. No output-frame-rounded fade counts or false mathematical equality claim.
+
+Audio uses existing canonical48k absolute sample boundaries. FadeEnvelope::audio_gain and lower_audio_filters use the same integer start/sample counts, native afade linear/tri. Apply after canonical trim and gain in shared AudioPlan, before mixing. Independent and linked audio properties need explicit graph semantics; visual fade never silently fades audio.
+
+Alternatives: eq is YUV-oriented with different alpha semantics; frame-count fade rounds output endpoints. Full RGB geq was rejected by measurement. LUT assets require provenance; GPU/WGSL needs later parity/cost proof, and a second Rust image kernel duplicates conversion. No new dependency/window coupling/mandatory runtime. Existing worker cancellation, deadlines and Windows console suppression retained. Optimized reference is not a60FPS latency promise.
+
+Official sources checked2026-10-12: [filter manual source](https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/doc/filters.texi), [geq implementation](https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavfilter/vf_geq.c), [legal/license](https://ffmpeg.org/legal.html). HTML filter endpoint timed out; official maintainer document read. LGPL/GPL depends on optional build components; no binary bundled, codec patent review remains separate. No downloaded presets/fonts/models.
+
+Acceptance: strict bounds/version/unknown-field rejection; actual colour/alpha/reset/fractional fades; canonical sample goldens; storage/history/conflict/live clients; native controls and decoded UHD preview/export parity. Focused helpers do not establish shipped capability. See COLOUR_FADE_IMPLEMENTATION for executed tests and limits.

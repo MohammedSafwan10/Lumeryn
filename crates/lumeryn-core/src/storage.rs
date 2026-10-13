@@ -133,6 +133,7 @@ pub struct PreparedImports {
     imports: Vec<Option<Media>>,
     audio_proofs: Vec<Option<AudioProof>>,
     visual_proofs: Vec<Option<VisualProof>>,
+    transition_proofs: Vec<VisualProof>,
 }
 
 #[derive(Clone)]
@@ -419,6 +420,7 @@ impl Store {
             imports,
             audio_proofs,
             visual_proofs,
+            transition_proofs,
             ..
         } = prepared;
         if self.storage_version().await? != STORAGE_VERSION {
@@ -503,6 +505,9 @@ impl Store {
             project = restored;
             object_ids.push(project.id);
         } else {
+            for proof in &transition_proofs {
+                proof.check(&project, &self.path)?;
+            }
             for (((operation, imported), proof), visual_proof) in batch
                 .operations
                 .iter()
@@ -523,6 +528,8 @@ impl Store {
                     | Edit::InsertClip { id, .. }
                     | Edit::AddAudioClip { id, .. }
                     | Edit::AddVisualTrack { id, .. }
+                    | Edit::CreateScene { id, .. }
+                    | Edit::AddScenePlacement { id, .. }
                     | Edit::AddVisualClip { id, .. }
                     | Edit::PasteClip { id, .. }
                     | Edit::DuplicateClip { id, .. } => object_ids.push(*id),
@@ -538,9 +545,23 @@ impl Store {
                     Edit::MoveVisualClip { clip_id, .. }
                     | Edit::SetVisualRange { clip_id, .. }
                     | Edit::SetVisualPlacement { clip_id, .. }
+                    | Edit::SetTransition { id: clip_id, .. }
+                    | Edit::DeleteTransition {
+                        transition_id: clip_id,
+                    }
+                    | Edit::SetTimeEffect { clip_id, .. }
+                    | Edit::SetVisualTransform { clip_id, .. }
+                    | Edit::SetVisualEffects { clip_id, .. }
+                    | Edit::SetVisualAnimation { clip_id, .. }
                     | Edit::DeleteVisualClip { clip_id } => object_ids.push(*clip_id),
                     Edit::ReorderVisualTrack { track_id, .. }
                     | Edit::DeleteVisualTrack { track_id } => object_ids.push(*track_id),
+                    Edit::SetScene { scene_id, .. } | Edit::DeleteScene { scene_id } => {
+                        object_ids.push(*scene_id)
+                    }
+                    Edit::SetSceneRange { clip_id, .. }
+                    | Edit::MoveScenePlacement { clip_id, .. }
+                    | Edit::DeleteScenePlacement { clip_id } => object_ids.push(*clip_id),
                     Edit::RenameMedia { media_id, .. } | Edit::RemoveMedia { media_id } => {
                         object_ids.push(*media_id)
                     }
@@ -714,6 +735,8 @@ impl Store {
                 ids.extend(snapshot.clips.iter().map(|clip| clip.id));
                 ids.extend(snapshot.audio_track_id);
                 ids.extend(snapshot.audio_clips.iter().map(|clip| clip.id));
+                ids.extend(snapshot.visual_tracks.iter().map(|track| track.id));
+                ids.extend(snapshot.visual_clips.iter().map(|clip| clip.id));
                 previous.push(snapshot);
             }
             if previous.last().map(serde_json::to_value).transpose()?
@@ -736,12 +759,14 @@ impl Store {
                 })?
             };
             for snapshot in &mut previous {
-                if graph_from == 2 && snapshot.audio_track_id != Some(audio_track) {
+                if graph_from >= 2 && snapshot.audio_track_id != Some(audio_track) {
                     return Err(Error::Invalid(
                         "migration history audio track identity differs".into(),
                     ));
                 }
-                // Compose 1 -> 2 -> 3 without changing durable commands, receipts or revisions.
+                // Compose legacy schemas into the current graph without changing
+                // durable commands, receipts, revisions or existing visual identities.
+                // Schema 5 scene collections default empty; legacy media never gains fake scene IDs.
                 if snapshot.schema_version == 1 {
                     snapshot.schema_version = 2;
                     snapshot.audio_track_id = Some(audio_track);
@@ -1198,6 +1223,7 @@ pub async fn prepare_verified_imports(
         commands,
         audio_proofs: vec![None; imports.len()],
         visual_proofs: vec![None; imports.len()],
+        transition_proofs: Vec::new(),
         imports,
     })
 }
@@ -1245,6 +1271,10 @@ pub async fn prepare_imports(
                 | Edit::AddVisualClip { .. }
                 | Edit::SetVisualRange { .. }
                 | Edit::SetVisualPlacement { .. }
+                | Edit::SetTimeEffect { .. }
+                | Edit::SetVisualTransform { .. }
+                | Edit::SetVisualEffects { .. }
+                | Edit::SetVisualAnimation { .. }
                 | Edit::MoveVisualClip { .. }
         )
     }) {
@@ -1303,10 +1333,92 @@ pub async fn prepare_imports(
         };
         audio_proofs.push(proof);
     }
+    let mut transition_proofs = Vec::new();
+    for operation in &batch.operations {
+        if let Edit::SetTransition {
+            outgoing_clip_id,
+            incoming_clip_id,
+            ..
+        } = operation
+        {
+            let project = current
+                .as_ref()
+                .ok_or_else(|| Error::NotFound("transition project".into()))?;
+            for id in [outgoing_clip_id, incoming_clip_id] {
+                let clip = project
+                    .clips
+                    .iter()
+                    .find(|clip| clip.id == *id)
+                    .ok_or_else(|| Error::NotFound("transition source clip".into()))?;
+                let media = project
+                    .media
+                    .iter()
+                    .find(|media| media.id == clip.media_id)
+                    .ok_or_else(|| Error::NotFound("transition source media".into()))?;
+                let parent = project_path
+                    .parent()
+                    .ok_or_else(|| Error::Invalid("project parent missing".into()))?;
+                let path = local_file(&parent.join(&media.path))?;
+                let before = std::fs::metadata(&path)?;
+                let digest = crate::media::content_hash(&path).await?;
+                let after = std::fs::metadata(&path)?;
+                if before.len() != media.metadata.size_bytes
+                    || Some(&digest) != media.metadata.blake3.as_ref()
+                    || before.modified()? != after.modified()?
+                    || before.len() != after.len()
+                {
+                    return Err(Error::Invalid(
+                        "transition source changed; reimport media".into(),
+                    ));
+                }
+                transition_proofs.push(VisualProof {
+                    media_id: media.id,
+                    path: media.path.clone(),
+                    digest,
+                    size_bytes: after.len(),
+                    modified: after.modified()?,
+                });
+            }
+        }
+    }
     let mut visual_proofs = Vec::with_capacity(batch.operations.len());
     let mut visual_sources = HashMap::<Uuid, VisualProof>::new();
     for operation in &batch.operations {
         let media_id = match operation {
+            Edit::SetVisualAnimation { clip_id, .. } if current.as_ref().is_some_and(|project| project.scene_placements.iter().any(|clip| clip.id == *clip_id)) || batch.operations.iter().any(|operation| matches!(operation, Edit::AddScenePlacement { id, .. } if id == clip_id)) => None,
+            Edit::SetTimeEffect {clip_id,..} | Edit::SetVisualTransform { clip_id, .. } | Edit::SetVisualEffects { clip_id, .. } | Edit::SetVisualAnimation { clip_id, .. } => {
+                batch
+                    .operations
+                    .iter()
+                    .find_map(|operation| match operation {
+                        Edit::AddClip { id, media_id, .. }
+                        | Edit::InsertClip { id, media_id, .. }
+                        | Edit::AddVisualClip { id, media_id, .. }
+                            if id == clip_id =>
+                        {
+                            Some(*media_id)
+                        }
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        current.as_ref().and_then(|project| {
+                            project
+                                .clips
+                                .iter()
+                                .find(|clip| clip.id == *clip_id)
+                                .map(|clip| clip.media_id)
+                                .or_else(|| {
+                                    project
+                                        .visual_clips
+                                        .iter()
+                                        .find(|clip| clip.id == *clip_id)
+                                        .map(|clip| clip.media_id)
+                                })
+                        })
+                    })
+                    .ok_or_else(|| Error::NotFound(format!("visual clip {clip_id}")))?
+                    .into()
+            }
             Edit::AddVisualClip { media_id, .. } => Some(*media_id),
             Edit::SetVisualRange { clip_id, .. }
             | Edit::SetVisualPlacement { clip_id, .. }
@@ -1388,6 +1500,7 @@ pub async fn prepare_imports(
         imports,
         audio_proofs,
         visual_proofs,
+        transition_proofs,
     })
 }
 

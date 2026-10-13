@@ -95,7 +95,7 @@ async fn schema_two_migration_keeps_audio_identity_all_history_and_receipt_bytes
         .await?;
     let migrated = store.migrate().await?;
     assert_eq!(migrated["graph_from"], 2);
-    assert_eq!(migrated["graph_to"], 3);
+    assert_eq!(migrated["graph_to"], lumeryn_core::model::SCHEMA_VERSION);
     assert_eq!(store.inspect().await?.audio_track_id, Some(audio_track));
     assert_eq!(bytes(&mut connection).await?, commands);
     let actual: Vec<(String, String, i64, String)> =
@@ -108,7 +108,7 @@ async fn schema_two_migration_keeps_audio_identity_all_history_and_receipt_bytes
         .await?;
     for json in rows {
         let project: Project = serde_json::from_str(&json)?;
-        assert_eq!(project.schema_version, 3);
+        assert_eq!(project.schema_version, lumeryn_core::model::SCHEMA_VERSION);
         assert_eq!(project.audio_track_id, Some(audio_track));
         assert!(project.visual_tracks.is_empty());
         assert!(project.visual_clips.is_empty());
@@ -181,7 +181,7 @@ async fn explicit_graph_migration_preserves_history_receipts_and_legacy_read_sha
             .await?;
     let migration = store.migrate().await?;
     assert_eq!(migration["graph_from"], 1);
-    assert_eq!(migration["graph_to"], 3);
+    assert_eq!(migration["graph_to"], lumeryn_core::model::SCHEMA_VERSION);
     assert_eq!(migration["project_revision"], 2);
     let migrated = store.inspect().await?;
     let track = migrated
@@ -202,7 +202,7 @@ async fn explicit_graph_migration_preserves_history_receipts_and_legacy_read_sha
             .await?;
     for snapshot in histories {
         let previous: Project = serde_json::from_str(&snapshot)?;
-        assert_eq!(previous.schema_version, 3);
+        assert_eq!(previous.schema_version, lumeryn_core::model::SCHEMA_VERSION);
         assert_eq!(previous.audio_track_id, Some(track));
         assert!(previous.audio_clips.is_empty());
     }
@@ -282,7 +282,7 @@ fn legacy_schema_rejects_audio_extensions_and_future_versions() -> Result<()> {
     assert!(project.validate().is_err());
     project.audio_track_id = None;
     project.validate()?;
-    project.schema_version = 4;
+    project.schema_version = lumeryn_core::model::SCHEMA_VERSION + 1;
     assert!(matches!(project.validate(), Err(Error::Unsupported(_))));
     let track = Uuid::new_v4();
     let mut value = serde_json::to_value(project)?;
@@ -369,7 +369,7 @@ async fn mixed_graph_history_cannot_downgrade_current_project_on_undo() -> Resul
     );
     assert!(store.integrity_check().await.is_err());
     let current = store.inspect().await?;
-    assert_eq!(current.schema_version, 3);
+    assert_eq!(current.schema_version, lumeryn_core::model::SCHEMA_VERSION);
     assert_eq!(current.revision, 1);
     assert_eq!(current.audio_track_id, project.audio_track_id);
     Ok(())

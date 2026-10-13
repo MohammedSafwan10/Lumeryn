@@ -404,7 +404,7 @@ pub fn show(
                 ui.interact(label_rect,ui.id().with(("visual-track",track_id)),Sense::click()).on_hover_text("Right-click to reorder or remove an empty layer.").context_menu(|ui|{
                     if ui.add_enabled(view.editable&&index+1<project.visual_tracks.len(),egui::Button::new("Move higher")).clicked(){actions.push(Action::ReorderVisualTrack{track_id:*track_id,before:project.visual_tracks.get(index+2).map(|t|t.id)});ui.close();}
                     if ui.add_enabled(view.editable&&index>0,egui::Button::new("Move lower")).clicked(){actions.push(Action::ReorderVisualTrack{track_id:*track_id,before:index.checked_sub(1).and_then(|i|project.visual_tracks.get(i)).map(|t|t.id)});ui.close();}
-                    if ui.add_enabled(view.editable&&!project.visual_clips.iter().any(|c|c.track_id==*track_id),egui::Button::new("Remove empty layer")).clicked(){actions.push(Action::DeleteVisualTrack(*track_id));ui.close();}
+                    if ui.add_enabled(view.editable&&!project.visual_clips.iter().any(|c|c.track_id==*track_id)&&!project.scene_placements.iter().any(|c|c.track_id==*track_id),egui::Button::new("Remove empty layer")).clicked(){actions.push(Action::DeleteVisualTrack(*track_id));ui.close();}
                 });
             }
             let clips:Vec<_> = if primary {project.clips.iter().map(|c|(c.id,c.media_id,c.at_frame,c.duration_frames)).collect()} else {
@@ -461,6 +461,26 @@ pub fn show(
                     }
                 }
             }
+            for placement in project.scene_placements.iter().filter(|p| p.track_id == *track_id) {
+                let block = Rect::from_min_max(pos2(origin + placement.at_frame as f32 * pixels, lane.top() + 2.0),
+                    pos2(origin + (placement.at_frame + placement.duration_frames) as f32 * pixels, lane.bottom() - 2.0));
+                let visible = block.intersect(viewport);
+                if visible.width() <= 0.0 || visible.height() <= 0.0 { continue; }
+                timeline.visible_clips += 1;
+                let p = ui.painter().with_clip_rect(visible);
+                p.rect_filled(block, 4.0, design::PANEL);
+                p.rect_stroke(block, 4.0, Stroke::new(if view.selected == Some(placement.id) { 2.5 } else { 1.0 },
+                    if view.selected == Some(placement.id) { design::ACCENT } else { design::BORDER }), StrokeKind::Inside);
+                let name = project.scenes.iter().find(|s| s.id == placement.scene_id).map_or("Scene", |s| s.name.as_str());
+                p.text(block.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, name, FontId::proportional(13.0), design::TEXT);
+                let body = ui.interact(visible, ui.id().with(("scene-placement", placement.id)), Sense::click_and_drag());
+                if body.clicked() { actions.push(Action::Select(placement.id)); }
+                if view.editable && body.drag_started_by(egui::PointerButton::Primary) {
+                    let grabbed = body.interact_pointer_pos().map_or(0, |point| (((point.x - block.left()) / pixels).max(0.0).round() as u64).min(placement.duration_frames.saturating_sub(1)));
+                    body.dnd_set_drag_payload(DragPayload { project: project.id, revision: project.revision, epoch: view.epoch,
+                        source: DragSource::VisualClip { clip: placement.id, grab_offset: grabbed } });
+                }
+            }
             if let Some(payload)=egui::DragAndDrop::payload::<DragPayload>(ui.ctx())
                 && let Some(pointer)=ui.input(|i|i.pointer.interact_pos())
                 && lane.intersect(viewport).contains(pointer)
@@ -469,7 +489,7 @@ pub fn show(
                 let offset=match payload.source {DragSource::VisualClip {grab_offset,..}=>grab_offset,_=>0};
                 let raw=(((pointer.x-origin)/pixels).max(0.0).round() as u64).saturating_sub(offset);
                 let at=if ui.input(|i|i.modifiers.alt){raw}else{snap(project,raw,view.playhead,pixels)};
-                let accepted=valid&&match payload.source {DragSource::Media(id)=>project.media.iter().any(|m|m.id==id&&m.metadata.video.is_some()&&(!primary||m.metadata.video.as_ref().is_some_and(|v|v.codec!="png"))),DragSource::VisualClip {clip,..}=>if primary{project.clips.iter().any(|c|c.id==clip)}else{project.visual_clips.iter().any(|c|c.id==clip)},DragSource::Clip(_)=>primary,DragSource::AudioClip {..}=>false};
+                let accepted=valid&&match payload.source {DragSource::Media(id)=>project.media.iter().any(|m|m.id==id&&m.metadata.video.is_some()&&(!primary||m.metadata.video.as_ref().is_some_and(|v|v.codec!="png"))),DragSource::VisualClip {clip,..}=>if primary{project.clips.iter().any(|c|c.id==clip)}else{project.visual_clips.iter().any(|c|c.id==clip)||project.scene_placements.iter().any(|c|c.id==clip)},DragSource::Clip(_)=>primary,DragSource::AudioClip {..}=>false};
                 ui.ctx().set_cursor_icon(if accepted{egui::CursorIcon::Grabbing}else{egui::CursorIcon::NotAllowed});
                 if accepted {let x=origin+at as f32*pixels;painter.line_segment([pos2(x,lane.top()),pos2(x,lane.bottom())],Stroke::new(2.0,design::ACCENT));}
                 if ui.input(|i|i.pointer.button_released(egui::PointerButton::Primary)){

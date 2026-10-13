@@ -1,5 +1,29 @@
 # Task board
 
+## Disk-pressure maintenance
+
+- [x] Audit storage and stop Cargo builds before cleanup.
+- [x] Execute owner-approved cache-only deletion; verify preserved executable hashes and66.9GiB physical recovery.
+- [x] Record cleanup manifest and establish a single shared build target, serialized Cargo work and reduced dev/test artifact profiles.
+- [ ] Measure the next consolidated build footprint; complete feature integration and gates before rollout.
+
+## Owner-authorized six-area implementation — paused by owner on 2026-10-13
+
+Current source and exact restart work are recorded in [PAUSED_CHECKPOINT](docs/roadmap/PAUSED_CHECKPOINT.md). Earlier assignment states below are historical; no specialist or build is left running. Final integration/gates/rollout remain unfinished.
+
+Four active-agent slots require two waves; six specialist assignments are distinct, not six simultaneous writers. Root owns shared graph/migration/client integration and final review/gates.
+
+| Area | Specialist ownership | Current execution |
+|---|---|---|
+| 1 Transforms | `v2_transform_backend`: isolated checked transform module, pixel fixtures, official research/ADR | Active; root integrates schema/CLI/native/shared lowering after contract |
+| 2 Editable text/shapes | `v3_typography`: measured layout/raster selection, isolated scene module, fixed-font goldens/research/ADR | Active; no dependency selection before measurement/license review |
+| 3 Animation/templates | `v4_animation`: rational evaluator, original declarative presets, deterministic seek tests/research/ADR | Active; coordinate scene/transform contract, integrate after static rendering |
+| 4 Colour/filters/fades | Dedicated effects specialist in next free slot | Queued; versioned SDR operations, shared visual/audio envelopes, real pixels/samples |
+| 5 Transitions/speed/freeze | Dedicated time specialist in next free slot | Queued; proven handles, rational mapping, explicit audio/ripple and freeze policy |
+| 6 Performance expansion | Dedicated measured-performance specialist in next free slot | Queued; benchmark reference first, cache/proxy/scheduling only with measured gain |
+
+Source ownership is explicit. New foundations do not count as shipped until graph/service/CLI/Studio/preview/export integration, schema/history/source tests, actual output/native verification and independent review pass. Owner projects/running editor are preserved; no speculative GPU/backend replacement or dependency accumulation.
+
 ## Media drawer responsiveness follow-up
 
 - [x] Replace one-button grid budget with both video actions, FPS details, font/interaction height and spacing; grid scrolls while actions remain visible.

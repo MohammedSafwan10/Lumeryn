@@ -54,6 +54,9 @@ pub struct AudioPlan {
     segments: Vec<AudioSegment>,
     /// Only embedded video contributions may pad beyond unproven/short audio bounds.
     embedded_padding: Vec<bool>,
+    /// Private parallel policy preserves the public independent AudioSegment API.
+    speeds: Vec<crate::time_effects::PlaybackSpeed>,
+    source_lengths: Vec<u64>,
 }
 
 /// Generated labels and numeric filter parameters only. Paths are separate argv values.
@@ -85,6 +88,24 @@ pub fn sample_boundary(rate: FrameRate, frame: u64) -> Result<u64> {
     Ok(samples)
 }
 
+/// Floor exact source endpoints once, independent of the destination placement.
+fn moving_source_samples(
+    rate: FrameRate,
+    source_in: u64,
+    duration: u64,
+    speed: crate::time_effects::PlaybackSpeed,
+) -> Result<u64> {
+    let (n, d) = speed.ratio();
+    let source_end = u128::from(source_in) * u128::from(d) + u128::from(duration) * u128::from(n);
+    let samples = source_end * u128::from(rate.denominator()) * u128::from(MIX_SAMPLE_RATE)
+        / (u128::from(d) * u128::from(rate.numerator()));
+    let end = u64::try_from(samples)
+        .map_err(|_| Error::Invalid("audio source sample overflow".into()))?;
+    end.checked_sub(sample_boundary(rate, source_in)?)
+        .filter(|length| *length > 0)
+        .ok_or_else(|| Error::Invalid("time-remapped source has no complete samples".into()))
+}
+
 impl AudioPlan {
     pub fn new(
         rate: FrameRate,
@@ -101,7 +122,15 @@ impl AudioPlan {
             ));
         }
         let embedded_padding = vec![false; segments.len()];
-        Self::build(rate, total_frames, sources, segments, embedded_padding)
+        Self::build(
+            rate,
+            total_frames,
+            sources,
+            segments,
+            embedded_padding,
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     fn build(
@@ -110,11 +139,30 @@ impl AudioPlan {
         sources: Vec<AudioSource>,
         segments: Vec<AudioSegment>,
         embedded_padding: Vec<bool>,
+        mut speeds: Vec<crate::time_effects::PlaybackSpeed>,
+        mut source_lengths: Vec<u64>,
     ) -> Result<Self> {
+        if speeds.is_empty() {
+            speeds.resize(segments.len(), crate::time_effects::PlaybackSpeed::Normal);
+        }
+        if source_lengths.is_empty() {
+            source_lengths = segments
+                .iter()
+                .map(|segment| {
+                    let end = segment
+                        .at_frame
+                        .checked_add(segment.duration_frames)
+                        .ok_or_else(|| Error::Invalid("audio end overflow".into()))?;
+                    Ok(sample_boundary(rate, end)? - sample_boundary(rate, segment.at_frame)?)
+                })
+                .collect::<Result<Vec<_>>>()?;
+        }
         if total_frames == 0
             || sources.len() > MAX_AUDIO_INPUTS
             || segments.len() > MAX_AUDIO_INPUTS
             || embedded_padding.len() != segments.len()
+            || speeds.len() != segments.len()
+            || source_lengths.len() != segments.len()
         {
             return Err(Error::Invalid(
                 "audio plan requires positive visual duration and at most 64 sources/contributions"
@@ -144,7 +192,9 @@ impl AudioPlan {
                 ));
             }
         }
-        for (segment, padding) in segments.iter().zip(&embedded_padding) {
+        for ((segment, padding), consumed) in
+            segments.iter().zip(&embedded_padding).zip(&source_lengths)
+        {
             let source = sources.get(segment.source).ok_or_else(|| {
                 Error::Invalid("audio contribution source index is invalid".into())
             })?;
@@ -166,7 +216,7 @@ impl AudioPlan {
             let length = sample_boundary(rate, end)? - sample_boundary(rate, segment.at_frame)?;
             let source_end = segment
                 .source_in_sample
-                .checked_add(length)
+                .checked_add(*consumed)
                 .ok_or_else(|| Error::Invalid("audio source range overflow".into()))?;
             if length == 0
                 || (!padding
@@ -186,6 +236,8 @@ impl AudioPlan {
             sources,
             segments,
             embedded_padding,
+            speeds,
+            source_lengths,
         })
     }
 
@@ -200,6 +252,8 @@ impl AudioPlan {
         let mut sources = Vec::new();
         let mut segments = Vec::new();
         let mut embedded_padding = Vec::new();
+        let mut speeds = Vec::new();
+        let mut source_lengths = Vec::new();
         let mut clips = project.clips.iter().collect::<Vec<_>>();
         clips.sort_by_key(|clip| clip.at_frame);
         let contributions = project.audio_clips.len()
@@ -236,7 +290,19 @@ impl AudioPlan {
                 .iter()
                 .find(|media| media.id == clip.media_id)
                 .ok_or_else(|| Error::NotFound("audio clip media".into()))?;
-            if media.metadata.audio.is_some() {
+            let effect = project
+                .time_effects
+                .get(&clip.id)
+                .copied()
+                .unwrap_or_default();
+            if media.metadata.audio.is_some() && !effect.is_silent() {
+                speeds.push(effect.speed());
+                source_lengths.push(moving_source_samples(
+                    project.frame_rate,
+                    clip.source_in_frame,
+                    clip.duration_frames,
+                    effect.speed(),
+                )?);
                 sources.push(project_source(media, parent)?);
                 segments.push(AudioSegment {
                     source: sources.len() - 1,
@@ -256,7 +322,19 @@ impl AudioPlan {
                     .iter()
                     .find(|media| media.id == clip.media_id)
                     .ok_or_else(|| Error::NotFound("visual audio source".into()))?;
-                if media.metadata.audio.is_some() {
+                let effect = project
+                    .time_effects
+                    .get(&clip.id)
+                    .copied()
+                    .unwrap_or_default();
+                if media.metadata.audio.is_some() && !effect.is_silent() {
+                    speeds.push(effect.speed());
+                    source_lengths.push(moving_source_samples(
+                        project.frame_rate,
+                        source_in_frame,
+                        clip.duration_frames,
+                        effect.speed(),
+                    )?);
                     sources.push(project_source(media, parent)?);
                     segments.push(AudioSegment {
                         source: sources.len() - 1,
@@ -271,6 +349,11 @@ impl AudioPlan {
             }
         }
         for clip in &project.audio_clips {
+            speeds.push(crate::time_effects::PlaybackSpeed::Normal);
+            source_lengths.push(
+                sample_boundary(project.frame_rate, clip.at_frame + clip.duration_frames)?
+                    - sample_boundary(project.frame_rate, clip.at_frame)?,
+            );
             let media = project
                 .media
                 .iter()
@@ -293,6 +376,8 @@ impl AudioPlan {
             sources,
             segments,
             embedded_padding,
+            speeds,
+            source_lengths,
         )?;
         plan.verify_sources().await?;
         Ok(plan)
@@ -363,7 +448,17 @@ impl AudioPlan {
         for (index, segment) in self.segments.iter().enumerate() {
             let at = sample_boundary(self.rate, segment.at_frame)?;
             let end = sample_boundary(self.rate, segment.at_frame + segment.duration_frames)?;
-            let source_end = segment.source_in_sample + (end - at);
+            let speed = self.speeds[index];
+            let consumed = self.source_lengths[index];
+            let source_end = segment
+                .source_in_sample
+                .checked_add(consumed)
+                .ok_or_else(|| Error::Invalid("audio source end overflow".into()))?;
+            let tempo = if speed == crate::time_effects::PlaybackSpeed::Normal {
+                String::new()
+            } else {
+                format!(",atempo={}", speed.tempo())
+            };
             let gain = if segment.muted {
                 "0".to_owned()
             } else {
@@ -378,7 +473,7 @@ impl AudioPlan {
                 String::new()
             };
             filters.push(format!(
-                "[{}:a:0]{CANONICAL_DECODE_FILTER},atrim=start_sample={}:end_sample={source_end},asetpts=PTS-STARTPTS{padding},volume={gain}:precision=float,adelay={at}S:all=1[lumeryn_audio_{index}]",
+                "[{}:a:0]{CANONICAL_DECODE_FILTER},atrim=start_sample={}:end_sample={source_end},asetpts=PTS-STARTPTS{tempo}{padding},volume={gain}:precision=float,adelay={at}S:all=1[lumeryn_audio_{index}]",
                 input_offset + index, segment.source_in_sample,
             ));
             labels.push_str(&format!("[lumeryn_audio_{index}]"));

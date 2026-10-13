@@ -1,10 +1,14 @@
 use crate::{Error, Result, media::Metadata, time::FrameRate};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::PathBuf,
+};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 5;
+pub const MAX_SCENES: usize = 8;
 pub const MAX_FRAMES: u64 = 1_000_000_000;
 pub const MAX_VISUAL_TRACKS: usize = 2;
 pub const MAX_COMPOSITION_INPUTS: usize = 3;
@@ -31,6 +35,64 @@ pub struct Project {
     pub visual_tracks: Vec<VisualTrack>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visual_clips: Vec<VisualClip>,
+    /// Shared visual properties for primary and overlay clips; keys are stable clip IDs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub visual_settings: BTreeMap<Uuid, VisualSettings>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scenes: Vec<SceneAsset>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scene_placements: Vec<ScenePlacement>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub animations: BTreeMap<Uuid, crate::animation::Animation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub time_effects: BTreeMap<Uuid, crate::time_effects::TimeEffect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transitions: Vec<TransitionEdge>,
+}
+
+/// Fixed existing cut; video-only transition with unchanged hard-cut linked audio.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TransitionEdge {
+    pub id: Uuid,
+    pub outgoing_clip_id: Uuid,
+    pub incoming_clip_id: Uuid,
+    pub kind: crate::time_effects::TransitionKind,
+    pub duration_frames: u64,
+}
+
+/// Editable semantic scene; fonts are identities, never project-supplied paths.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SceneAsset {
+    pub id: Uuid,
+    pub name: String,
+    pub document: crate::scene_text::SceneDocument,
+}
+
+/// Silent full-canvas hold on an ordered visual track; no fake media identifier.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScenePlacement {
+    pub id: Uuid,
+    pub scene_id: Uuid,
+    pub track_id: Uuid,
+    pub at_frame: u64,
+    pub duration_frames: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VisualSettings {
+    pub transform: crate::visual_transform::VisualTransform,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<crate::visual_effects::VisualEffects>,
+}
+
+impl VisualSettings {
+    pub fn is_identity(&self) -> bool {
+        self.transform.is_identity() && self.effects.is_none_or(|effects| effects.is_identity())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -124,6 +186,38 @@ pub struct AudioClip {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
+    CreateScene {
+        id: Uuid,
+        name: String,
+        document: crate::scene_text::SceneDocument,
+    },
+    SetScene {
+        scene_id: Uuid,
+        document: crate::scene_text::SceneDocument,
+    },
+    AddScenePlacement {
+        id: Uuid,
+        scene_id: Uuid,
+        track_id: Uuid,
+        at_frame: u64,
+        duration_frames: u64,
+    },
+    SetSceneRange {
+        clip_id: Uuid,
+        at_frame: u64,
+        duration_frames: u64,
+    },
+    MoveScenePlacement {
+        clip_id: Uuid,
+        track_id: Uuid,
+        at_frame: u64,
+    },
+    DeleteScenePlacement {
+        clip_id: Uuid,
+    },
+    DeleteScene {
+        scene_id: Uuid,
+    },
     AddVisualTrack {
         id: Uuid,
         name: String,
@@ -160,6 +254,32 @@ pub enum Edit {
         #[serde(deserialize_with = "deserialize_required_placement")]
         #[schemars(required, schema_with = "nullable_placement_schema")]
         placement: Option<VisualPlacement>,
+    },
+    SetTransition {
+        id: Uuid,
+        outgoing_clip_id: Uuid,
+        incoming_clip_id: Uuid,
+        kind: crate::time_effects::TransitionKind,
+        duration_frames: u64,
+    },
+    DeleteTransition {
+        transition_id: Uuid,
+    },
+    SetTimeEffect {
+        clip_id: Uuid,
+        effect: crate::time_effects::TimeEffect,
+    },
+    SetVisualAnimation {
+        clip_id: Uuid,
+        animation: crate::animation::Animation,
+    },
+    SetVisualEffects {
+        clip_id: Uuid,
+        effects: crate::visual_effects::VisualEffects,
+    },
+    SetVisualTransform {
+        clip_id: Uuid,
+        transform: crate::visual_transform::VisualTransform,
     },
     DeleteVisualClip {
         clip_id: Uuid,
@@ -332,6 +452,12 @@ impl Project {
             audio_clips: Vec::new(),
             visual_tracks: Vec::new(),
             visual_clips: Vec::new(),
+            visual_settings: BTreeMap::new(),
+            scenes: Vec::new(),
+            scene_placements: Vec::new(),
+            animations: BTreeMap::new(),
+            time_effects: BTreeMap::new(),
+            transitions: Vec::new(),
         };
         project.validate()?;
         Ok(project)
@@ -353,11 +479,136 @@ impl Project {
             ));
         }
         if self.schema_version < 3
-            && (!self.visual_tracks.is_empty() || !self.visual_clips.is_empty())
+            && (!self.visual_tracks.is_empty()
+                || !self.visual_clips.is_empty()
+                || !self.scene_placements.is_empty())
         {
             return Err(Error::Invalid(
                 "visual composition requires schema 3".into(),
             ));
+        }
+        if self.schema_version < 4 && !self.visual_settings.is_empty() {
+            return Err(Error::Invalid("visual transforms require schema 4".into()));
+        }
+        if self.schema_version < 5 && (!self.scenes.is_empty() || !self.scene_placements.is_empty())
+        {
+            return Err(Error::Invalid("editable scenes require schema 5".into()));
+        }
+        if self.schema_version < 5 && !self.animations.is_empty() {
+            return Err(Error::Invalid("animation requires schema 5".into()));
+        }
+        if self.schema_version < 5 && !self.time_effects.is_empty() {
+            return Err(Error::Invalid("time effects require schema5".into()));
+        }
+        self.validate_transitions()?;
+        for (clip_id, effect) in &self.time_effects {
+            if *effect == crate::time_effects::TimeEffect::Normal {
+                return Err(Error::Invalid("normal time effect must be omitted".into()));
+            }
+            let media_id = self
+                .clips
+                .iter()
+                .find(|clip| clip.id == *clip_id)
+                .map(|clip| clip.media_id)
+                .or_else(|| {
+                    self.visual_clips
+                        .iter()
+                        .find(|clip| {
+                            clip.id == *clip_id && matches!(clip.source, VisualSource::Video { .. })
+                        })
+                        .map(|clip| clip.media_id)
+                })
+                .ok_or_else(|| Error::NotFound(format!("time effect moving clip {clip_id}")))?;
+            if self
+                .media
+                .iter()
+                .find(|media| media.id == media_id)
+                .and_then(|media| media.metadata.video.as_ref())
+                .is_none_or(|video| video.codec == "png")
+            {
+                return Err(Error::Unsupported(
+                    "time effects require moving video".into(),
+                ));
+            }
+        }
+        for (clip_id, animation) in &self.animations {
+            validate_render_animation(animation)?;
+            let duration = self.visual_duration(*clip_id)?;
+            if animation.channels.is_empty() {
+                return Err(Error::Invalid(
+                    "empty animation must be omitted; reset through SetVisualAnimation".into(),
+                ));
+            }
+            animation.validate(duration).map_err(|error| {
+                Error::Invalid(format!(
+                    "clip {clip_id}: {error}; shorten/reset keys before trimming"
+                ))
+            })?;
+        }
+        if self.scenes.len() > MAX_SCENES {
+            return Err(Error::Unsupported(
+                "at most eight editable scenes are supported".into(),
+            ));
+        }
+        for scene in &self.scenes {
+            if scene.name.trim().is_empty()
+                || scene.name.len() > 256
+                || scene.name.chars().any(char::is_control)
+            {
+                return Err(Error::Invalid(
+                    "scene name must be nonblank, bounded and free of controls".into(),
+                ));
+            }
+            scene
+                .document
+                .validate()
+                .map_err(|error| Error::Invalid(error.to_string()))?;
+            if scene.document.width != self.width || scene.document.height != self.height {
+                return Err(Error::Invalid("scene canvas must match project canvas; remove scenes or recreate them for the new canvas".into()));
+            }
+        }
+        crate::scene_text::validate_audited_documents(
+            self.scenes.iter().map(|scene| &scene.document),
+        )
+        .map_err(|error| Error::Invalid(error.to_string()))?;
+        for (clip_id, settings) in &self.visual_settings {
+            let (media_id, duration_frames) = self
+                .clips
+                .iter()
+                .find(|clip| clip.id == *clip_id)
+                .map(|clip| (clip.media_id, clip.duration_frames))
+                .or_else(|| {
+                    self.visual_clips
+                        .iter()
+                        .find(|clip| clip.id == *clip_id)
+                        .map(|clip| (clip.media_id, clip.duration_frames))
+                })
+                .ok_or_else(|| Error::NotFound(format!("visual settings clip {clip_id}")))?;
+            let source = self
+                .media
+                .iter()
+                .find(|media| media.id == media_id)
+                .and_then(|media| media.metadata.video.as_ref())
+                .ok_or_else(|| {
+                    Error::Invalid("visual transform requires a verified visual source".into())
+                })?;
+            settings.transform.validate(source.width, source.height)?;
+            if let Some(effects) = settings.effects {
+                if self.schema_version < 5 || effects.is_identity() {
+                    return Err(Error::Invalid("effects require schema5 and identity effects must be omitted; reset through SetVisualEffects".into()));
+                }
+                effects.validate(duration_frames).map_err(|error| {
+                    Error::Invalid(format!(
+                        "clip {clip_id}: {error}; shorten/reset fades before trimming or splitting"
+                    ))
+                })?;
+            }
+            if settings.is_identity() {
+                return Err(Error::Invalid(
+                    "identity visual settings must be omitted; reset through visual settings edits"
+                        .into(),
+                ));
+            }
         }
         if self.name.trim().is_empty()
             || self.name.len() > 256
@@ -381,9 +632,20 @@ impl Project {
             || self.audio_track_id.is_some_and(|id| !ids.insert(id))
             || self.media.iter().any(|m| !ids.insert(m.id))
             || self.clips.iter().any(|c| !ids.insert(c.id))
+            || self.transitions.iter().any(|edge| !ids.insert(edge.id))
             || self.audio_clips.iter().any(|c| !ids.insert(c.id))
             || self.visual_tracks.iter().any(|track| !ids.insert(track.id))
             || self.visual_clips.iter().any(|clip| !ids.insert(clip.id))
+            || self.scenes.iter().any(|scene| !ids.insert(scene.id))
+            || self
+                .scenes
+                .iter()
+                .flat_map(|scene| &scene.document.nodes)
+                .any(|node| !ids.insert(node.id))
+            || self
+                .scene_placements
+                .iter()
+                .any(|clip| !ids.insert(clip.id))
             || (self.schema_version >= 3 && ids.contains(&Uuid::nil()))
         {
             return Err(Error::Invalid("object IDs must be unique".into()));
@@ -456,13 +718,27 @@ impl Project {
                     .iter()
                     .map(|clip| clip.at_frame.saturating_add(clip.duration_frames)),
             )
+            .chain(
+                self.scene_placements
+                    .iter()
+                    .map(|clip| clip.at_frame.saturating_add(clip.duration_frames)),
+            )
             .max()
             .unwrap_or(0)
     }
 
     /// The bounded reference compositor is required for overlays or primary-track gaps.
     pub fn uses_composition(&self) -> bool {
-        if !self.visual_clips.is_empty() {
+        if !self.animations.is_empty()
+            || !self.time_effects.is_empty()
+            || !self.transitions.is_empty()
+        {
+            return true;
+        }
+        if !self.visual_clips.is_empty()
+            || !self.visual_settings.is_empty()
+            || !self.scene_placements.is_empty()
+        {
             return true;
         }
         let mut clips = self.clips.iter().collect::<Vec<_>>();
@@ -540,14 +816,11 @@ impl Project {
                     {
                         return Err(Error::Unsupported("moving visual placement requires matching CFR video; use image holds for PNG".into()));
                     }
-                    if source_in_frame
-                        .checked_add(clip.duration_frames)
-                        .is_none_or(|end| end > video.frames)
-                    {
-                        return Err(Error::Invalid(
-                            "visual video range exceeds verified source frames".into(),
-                        ));
-                    }
+                    self.time_effects
+                        .get(&clip.id)
+                        .copied()
+                        .unwrap_or_default()
+                        .validate(*source_in_frame, clip.duration_frames, video.frames)?;
                 }
                 VisualSource::Image {} => {
                     if video.codec != "png" || video.frames != 1 || media.metadata.audio.is_some() {
@@ -563,6 +836,18 @@ impl Project {
                 end,
                 matches!(clip.source, VisualSource::Image {}),
             ));
+        }
+        for clip in &self.scene_placements {
+            self.visual_track_index(clip.track_id)?;
+            if !self.scenes.iter().any(|scene| scene.id == clip.scene_id) {
+                return Err(Error::NotFound(format!("scene {}", clip.scene_id)));
+            }
+            let end = clip
+                .at_frame
+                .checked_add(clip.duration_frames)
+                .filter(|end| clip.duration_frames > 0 && *end <= MAX_FRAMES)
+                .ok_or_else(|| Error::Invalid("invalid scene placement range".into()))?;
+            spans.push((clip.track_id, clip.at_frame, end, true));
         }
         spans.sort_by_key(|(track, start, _, _)| (*track, *start));
         if spans
@@ -636,9 +921,104 @@ impl Project {
                     videos += delta;
                 }
                 if videos > 2 || images > 1 {
-                    return Err(Error::Unsupported("composition supports at most two moving sources and one PNG hold simultaneously".into()));
+                    return Err(Error::Unsupported("composition supports at most two moving sources and one PNG or scene hold simultaneously".into()));
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn validate_transitions(&self) -> Result<()> {
+        if self.transitions.is_empty() {
+            return Ok(());
+        }
+        if self.schema_version < 5 {
+            return Err(Error::Invalid("transitions require schema5".into()));
+        }
+        if self.transitions.len() != 1
+            || self.clips.len() != 2
+            || !self.visual_clips.is_empty()
+            || !self.scene_placements.is_empty()
+            || !self.visual_settings.is_empty()
+            || !self.animations.is_empty()
+            || !self.time_effects.is_empty()
+        {
+            return Err(Error::Unsupported("fixed-cut transitions currently require exactly two adjacent primary video clips without overlays, transforms, effects, scenes, animation or time effects; remove the transition before combining those features".into()));
+        }
+        let edge = &self.transitions[0];
+        let outgoing = self
+            .clips
+            .iter()
+            .find(|clip| clip.id == edge.outgoing_clip_id)
+            .ok_or_else(|| Error::NotFound("transition outgoing clip".into()))?;
+        let incoming = self
+            .clips
+            .iter()
+            .find(|clip| clip.id == edge.incoming_clip_id)
+            .ok_or_else(|| Error::NotFound("transition incoming clip".into()))?;
+        let cut = outgoing
+            .at_frame
+            .checked_add(outgoing.duration_frames)
+            .ok_or_else(|| Error::Invalid("transition cut overflow".into()))?;
+        if outgoing.id == incoming.id || outgoing.at_frame != 0 || cut != incoming.at_frame {
+            return Err(Error::Invalid(
+                "transition requires adjacent distinct primary clips beginning at frame0".into(),
+            ));
+        }
+        let frames = |id| {
+            let media = self
+                .media
+                .iter()
+                .find(|media| media.id == id)
+                .ok_or_else(|| Error::NotFound("transition media".into()))?;
+            if media.metadata.blake3.is_none() {
+                return Err(Error::Unsupported(
+                    "transition requires verified source digest; reimport media".into(),
+                ));
+            }
+            media
+                .metadata
+                .video
+                .as_ref()
+                .ok_or_else(|| Error::NotFound("transition video source".into()))
+        };
+        let a = frames(outgoing.media_id)?;
+        let b = frames(incoming.media_id)?;
+        if a.codec == "png"
+            || b.codec == "png"
+            || !a.constant_rate
+            || !b.constant_rate
+            || a.frame_rate != self.frame_rate
+            || b.frame_rate != self.frame_rate
+            || a.start_time_micros != 0
+            || b.start_time_micros != 0
+            || a.sample_aspect_ratio != "1:1"
+            || b.sample_aspect_ratio != "1:1"
+        {
+            return Err(Error::Unsupported(
+                "transitions require verified zero-origin square-pixel matching CFR moving video"
+                    .into(),
+            ));
+        }
+        let source_out = outgoing
+            .source_in_frame
+            .checked_add(outgoing.duration_frames)
+            .ok_or_else(|| Error::Invalid("transition source endpoint overflow".into()))?;
+        let h = crate::time_effects::FixedCutTransition {
+            kind: edge.kind,
+            duration_frames: edge.duration_frames,
+        }
+        .validate_sources(
+            cut,
+            source_out,
+            a.frames,
+            incoming.source_in_frame,
+            b.frames,
+        )?;
+        if outgoing.duration_frames < h.before_cut || incoming.duration_frames < h.after_cut {
+            return Err(Error::Invalid(
+                "transition must fit inside both adjoining clip spans".into(),
+            ));
         }
         Ok(())
     }
@@ -713,17 +1093,17 @@ impl Project {
                 "clip placement requires matching constant frame rate".into(),
             ));
         }
-        let end = clip
-            .source_in_frame
-            .checked_add(clip.duration_frames)
-            .ok_or_else(|| Error::Invalid("source range overflow".into()))?;
+        self.time_effects
+            .get(&clip.id)
+            .copied()
+            .unwrap_or_default()
+            .validate(clip.source_in_frame, clip.duration_frames, video.frames)?;
         let timeline_end = clip
             .at_frame
             .checked_add(clip.duration_frames)
             .ok_or_else(|| Error::Invalid("timeline overflow".into()))?;
         if clip.duration_frames == 0
             || timeline_end > MAX_FRAMES
-            || end > video.frames
             || clip.track_id != self.video_track_id
         {
             return Err(Error::Invalid(
@@ -740,6 +1120,155 @@ impl Project {
             ));
         }
         match operation {
+            Edit::CreateScene { id, name, document } => self.scenes.push(SceneAsset {
+                id: *id,
+                name: name.clone(),
+                document: document.clone(),
+            }),
+            Edit::SetScene { scene_id, document } => {
+                let scene = self
+                    .scenes
+                    .iter_mut()
+                    .find(|scene| scene.id == *scene_id)
+                    .ok_or_else(|| Error::NotFound(format!("scene {scene_id}")))?;
+                scene.document = document.clone();
+            }
+            Edit::AddScenePlacement {
+                id,
+                scene_id,
+                track_id,
+                at_frame,
+                duration_frames,
+            } => self.scene_placements.push(ScenePlacement {
+                id: *id,
+                scene_id: *scene_id,
+                track_id: *track_id,
+                at_frame: *at_frame,
+                duration_frames: *duration_frames,
+            }),
+            Edit::SetSceneRange {
+                clip_id,
+                at_frame,
+                duration_frames,
+            } => {
+                let clip = self.scene_placement_mut(*clip_id)?;
+                clip.at_frame = *at_frame;
+                clip.duration_frames = *duration_frames;
+            }
+            Edit::MoveScenePlacement {
+                clip_id,
+                track_id,
+                at_frame,
+            } => {
+                let clip = self.scene_placement_mut(*clip_id)?;
+                clip.track_id = *track_id;
+                clip.at_frame = *at_frame;
+            }
+            Edit::DeleteScenePlacement { clip_id } => {
+                let index = self
+                    .scene_placements
+                    .iter()
+                    .position(|clip| clip.id == *clip_id)
+                    .ok_or_else(|| Error::NotFound(format!("scene placement {clip_id}")))?;
+                self.scene_placements.remove(index);
+                self.animations.remove(clip_id);
+            }
+            Edit::DeleteScene { scene_id } => {
+                if self
+                    .scene_placements
+                    .iter()
+                    .any(|clip| clip.scene_id == *scene_id)
+                {
+                    return Err(Error::Invalid(
+                        "remove scene placements before deleting their scene".into(),
+                    ));
+                }
+                let index = self
+                    .scenes
+                    .iter()
+                    .position(|scene| scene.id == *scene_id)
+                    .ok_or_else(|| Error::NotFound(format!("scene {scene_id}")))?;
+                self.scenes.remove(index);
+            }
+            Edit::SetTransition {
+                id,
+                outgoing_clip_id,
+                incoming_clip_id,
+                kind,
+                duration_frames,
+            } => {
+                let edge = TransitionEdge {
+                    id: *id,
+                    outgoing_clip_id: *outgoing_clip_id,
+                    incoming_clip_id: *incoming_clip_id,
+                    kind: *kind,
+                    duration_frames: *duration_frames,
+                };
+                if let Some(existing) = self.transitions.iter_mut().find(|edge| edge.id == *id) {
+                    *existing = edge;
+                } else {
+                    self.transitions.push(edge);
+                }
+            }
+            Edit::DeleteTransition { transition_id } => {
+                let index = self
+                    .transitions
+                    .iter()
+                    .position(|edge| edge.id == *transition_id)
+                    .ok_or_else(|| Error::NotFound(format!("transition {transition_id}")))?;
+                self.transitions.remove(index);
+            }
+            Edit::SetTimeEffect { clip_id, effect } => {
+                if !self.clips.iter().any(|clip| clip.id == *clip_id)
+                    && !self.visual_clips.iter().any(|clip| {
+                        clip.id == *clip_id && matches!(clip.source, VisualSource::Video { .. })
+                    })
+                {
+                    return Err(Error::NotFound(format!(
+                        "time effect moving clip {clip_id}"
+                    )));
+                }
+                if *effect == crate::time_effects::TimeEffect::Normal {
+                    self.time_effects.remove(clip_id);
+                } else {
+                    self.time_effects.insert(*clip_id, *effect);
+                }
+            }
+            Edit::SetVisualAnimation { clip_id, animation } => {
+                validate_render_animation(animation)?;
+                animation.validate(self.visual_duration(*clip_id)?)?;
+                if animation.channels.is_empty() {
+                    self.animations.remove(clip_id);
+                } else {
+                    self.animations.insert(*clip_id, animation.clone());
+                }
+            }
+            Edit::SetVisualTransform { clip_id, transform } => {
+                if !self.clips.iter().any(|clip| clip.id == *clip_id)
+                    && !self.visual_clips.iter().any(|clip| clip.id == *clip_id)
+                {
+                    return Err(Error::NotFound(format!("visual clip {clip_id}")));
+                }
+                let settings = self.visual_settings.entry(*clip_id).or_default();
+                settings.transform = *transform;
+                if settings.is_identity() {
+                    self.visual_settings.remove(clip_id);
+                }
+            }
+            Edit::SetVisualEffects { clip_id, effects } => {
+                if !self.clips.iter().any(|clip| clip.id == *clip_id)
+                    && !self.visual_clips.iter().any(|clip| clip.id == *clip_id)
+                {
+                    return Err(Error::NotFound(format!(
+                        "media visual clip {clip_id}; scene effects are unsupported"
+                    )));
+                }
+                let settings = self.visual_settings.entry(*clip_id).or_default();
+                settings.effects = (!effects.is_identity()).then_some(*effects);
+                if settings.is_identity() {
+                    self.visual_settings.remove(clip_id);
+                }
+            }
             Edit::AddVisualTrack { id, name } => {
                 self.visual_tracks.push(VisualTrack {
                     id: *id,
@@ -772,6 +1301,10 @@ impl Project {
                     .visual_clips
                     .iter()
                     .any(|clip| clip.track_id == *track_id)
+                    || self
+                        .scene_placements
+                        .iter()
+                        .any(|clip| clip.track_id == *track_id)
                 {
                     return Err(Error::Invalid(
                         "remove or move visual clips before deleting their track".into(),
@@ -828,6 +1361,9 @@ impl Project {
                     .position(|clip| clip.id == *clip_id)
                     .ok_or_else(|| Error::NotFound(format!("visual clip {clip_id}")))?;
                 self.visual_clips.remove(index);
+                self.visual_settings.remove(clip_id);
+                self.animations.remove(clip_id);
+                self.time_effects.remove(clip_id);
             }
             Edit::MoveClip { clip_id, at_frame } => {
                 let index = self.clip_index(*clip_id)?;
@@ -994,6 +1530,12 @@ impl Project {
                 right_clip_id,
                 at_frame,
             } => {
+                if self.time_effects.contains_key(clip_id) {
+                    return Err(Error::Unsupported("split time-remapped clips after resetting the time effect; automatic source rebasing is unsupported".into()));
+                }
+                if self.animations.contains_key(clip_id) {
+                    return Err(Error::Unsupported("splitting animated clips requires curve rebasing; reset animation before splitting".into()));
+                }
                 let index = self.clip_index(*clip_id)?;
                 let original = &self.clips[index];
                 let offset = at_frame
@@ -1017,13 +1559,25 @@ impl Project {
                 };
                 self.clips[index].duration_frames = offset;
                 self.clips.insert(index + 1, right);
+                if let Some(settings) = self.visual_settings.get(clip_id).cloned() {
+                    self.visual_settings.insert(*right_clip_id, settings);
+                }
             }
             Edit::DuplicateClip { clip_id, id } => {
                 self.require_contiguous()?;
                 let index = self.clip_index(*clip_id)?;
+                if let Some(effect) = self.time_effects.get(clip_id).copied() {
+                    self.time_effects.insert(*id, effect);
+                }
                 let mut duplicate = self.clips[index].clone();
                 duplicate.id = *id;
                 self.clips.insert(index + 1, duplicate);
+                if let Some(settings) = self.visual_settings.get(clip_id).cloned() {
+                    self.visual_settings.insert(*id, settings);
+                }
+                if let Some(animation) = self.animations.get(clip_id).cloned() {
+                    self.animations.insert(*id, animation);
+                }
                 self.reposition_contiguous()?;
             }
             Edit::DeleteClip { clip_id, ripple } => {
@@ -1032,6 +1586,9 @@ impl Project {
                 }
                 let index = self.clip_index(*clip_id)?;
                 self.clips.remove(index);
+                self.visual_settings.remove(clip_id);
+                self.animations.remove(clip_id);
+                self.time_effects.remove(clip_id);
                 if *ripple {
                     self.reposition_contiguous()?;
                 }
@@ -1064,7 +1621,8 @@ impl Project {
                 if self.frame_rate != *frame_rate
                     && (!self.clips.is_empty()
                         || !self.audio_clips.is_empty()
-                        || !self.visual_clips.is_empty())
+                        || !self.visual_clips.is_empty()
+                        || !self.scene_placements.is_empty())
                 {
                     return Err(Error::Unsupported(
                         "timeline frame rate is locked while video or audio clips are placed; choose it before editing".into(),
@@ -1079,6 +1637,12 @@ impl Project {
             } => {
                 let edit = crate::clipboard::paste_edit(self, clipboard, *id, *at_frame)?;
                 self.apply(&edit, None)?;
+                if let Some(settings) = &clipboard.visual_settings {
+                    self.visual_settings.insert(*id, settings.clone());
+                }
+                if let Some(animation) = &clipboard.animation {
+                    self.animations.insert(*id, animation.clone());
+                }
             }
             Edit::Undo {} | Edit::Redo {} => {
                 return Err(Error::Unsupported(
@@ -1087,6 +1651,33 @@ impl Project {
             }
         }
         self.validate()
+    }
+
+    pub fn visual_duration(&self, id: Uuid) -> Result<u64> {
+        self.clips
+            .iter()
+            .find(|clip| clip.id == id)
+            .map(|clip| clip.duration_frames)
+            .or_else(|| {
+                self.visual_clips
+                    .iter()
+                    .find(|clip| clip.id == id)
+                    .map(|clip| clip.duration_frames)
+            })
+            .or_else(|| {
+                self.scene_placements
+                    .iter()
+                    .find(|clip| clip.id == id)
+                    .map(|clip| clip.duration_frames)
+            })
+            .ok_or_else(|| Error::NotFound(format!("visual animation clip {id}")))
+    }
+
+    fn scene_placement_mut(&mut self, id: Uuid) -> Result<&mut ScenePlacement> {
+        self.scene_placements
+            .iter_mut()
+            .find(|clip| clip.id == id)
+            .ok_or_else(|| Error::NotFound(format!("scene placement {id}")))
     }
 
     fn clip_index(&self, id: Uuid) -> Result<usize> {
@@ -1146,4 +1737,17 @@ impl Project {
         }
         Ok(())
     }
+}
+
+fn validate_render_animation(animation: &crate::animation::Animation) -> Result<()> {
+    if animation.channels.iter().any(|channel| {
+        matches!(
+            channel.property,
+            crate::animation::AnimationProperty::ScaleX
+                | crate::animation::AnimationProperty::ScaleY
+        )
+    }) {
+        return Err(Error::Unsupported("animated scale requires bounded scale rendering proof; use a static destination rectangle".into()));
+    }
+    Ok(())
 }

@@ -101,6 +101,7 @@ pub(crate) async fn video(
         if let Some(visual) = &plan.visual_plan {
             visual.verify_sources().await?;
             let program = lumeryn_core::visual_backend::lower(visual, plan.width, plan.height)?;
+            let scene_resources = program.resources;
             let mut args = base_args();
             args.extend(["-filter_complex_threads".into(), "2".into()]);
             args.extend(program.input_args);
@@ -133,6 +134,7 @@ pub(crate) async fn video(
                 .await
                 .map_err(|_| Error::Timeout)??;
             visual.verify_sources().await?;
+            drop(scene_resources);
             return Ok::<_, Error>(());
         }
         for segment in plan.segments.iter().filter(|s| s.at + s.frames > start) {

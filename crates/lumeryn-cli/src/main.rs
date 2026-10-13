@@ -351,6 +351,18 @@ enum AssetCommand {
 
 #[derive(Debug, Subcommand)]
 enum TimelineCommand {
+    #[command(subcommand)]
+    Transition(TransitionCommand),
+    /// Validate an original starter and return its ordinary batch; commit with project batch.
+    Template {
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        request_file: PathBuf,
+    },
+    /// Editable static text and vector scenes on ordered full-canvas overlay tracks.
+    #[command(subcommand)]
+    Scene(SceneCommand),
     /// Ordered visual layers, explicit image holds and free placement.
     #[command(subcommand)]
     Visual(VisualCommand),
@@ -386,7 +398,157 @@ enum TimelineCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum TransitionCommand {
+    /// Fixed-cut transition with verified source handles; linked audio keeps its hard cut.
+    Set {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        id: Uuid,
+        #[arg(long)]
+        outgoing_clip_id: Uuid,
+        #[arg(long)]
+        incoming_clip_id: Uuid,
+        #[arg(long, value_enum)]
+        kind: TransitionStyle,
+        #[arg(long)]
+        duration_frames: u64,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Delete {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        transition_id: Uuid,
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum TransitionStyle {
+    CrossDissolve,
+    WipeLeft,
+    WipeRight,
+    WipeUp,
+    WipeDown,
+}
+impl From<TransitionStyle> for lumeryn_core::time_effects::TransitionKind {
+    fn from(value: TransitionStyle) -> Self {
+        use lumeryn_core::time_effects::TransitionKind as Kind;
+        match value {
+            TransitionStyle::CrossDissolve => Kind::CrossDissolve,
+            TransitionStyle::WipeLeft => Kind::WipeLeft,
+            TransitionStyle::WipeRight => Kind::WipeRight,
+            TransitionStyle::WipeUp => Kind::WipeUp,
+            TransitionStyle::WipeDown => Kind::WipeDown,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum SceneCommand {
+    Create {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        id: Option<Uuid>,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        document_file: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Set {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        scene_id: Uuid,
+        #[arg(long)]
+        document_file: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Add {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        id: Option<Uuid>,
+        #[arg(long)]
+        scene_id: Uuid,
+        #[arg(long)]
+        track_id: Uuid,
+        #[arg(long)]
+        at_frame: u64,
+        #[arg(long)]
+        duration_frames: u64,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Range {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        at_frame: u64,
+        #[arg(long)]
+        duration_frames: u64,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Move {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        track_id: Uuid,
+        #[arg(long)]
+        at_frame: u64,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    DeletePlacement {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Delete {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        scene_id: Uuid,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Inspect {
+        #[arg(long)]
+        project: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum VisualCommand {
+    /// Replace rational playback speed or an exact silent freeze hold, without ripple.
+    Time {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long, required_unless_present = "reset", conflicts_with = "reset")]
+        effect_file: Option<PathBuf>,
+        #[arg(long)]
+        reset: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
     TrackAdd {
         #[command(flatten)]
         write: Write,
@@ -477,6 +639,50 @@ enum VisualCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Replace clip-local keyframes, or remove animation. Sources remain immutable.
+    Animation {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long, required_unless_present = "reset", conflicts_with = "reset")]
+        animation_file: Option<PathBuf>,
+        #[arg(long)]
+        reset: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Replace all crop/fit/rotation/flip/opacity settings on a primary or overlay clip.
+    Transform {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        /// Strict VisualTransform JSON object; schema describes every required field.
+        #[arg(long, required_unless_present = "reset", conflicts_with = "reset")]
+        transform_file: Option<PathBuf>,
+        #[arg(long)]
+        reset: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Replace all colour and visual fade settings; presets reset fades to zero.
+    Effects {
+        #[command(flatten)]
+        write: Write,
+        #[arg(long)]
+        clip_id: Uuid,
+        #[arg(long, required_unless_present_any = ["reset", "preset"], conflicts_with_all = ["reset", "preset"])]
+        effects_file: Option<PathBuf>,
+        #[arg(long, conflicts_with = "preset")]
+        reset: bool,
+        #[arg(long, value_enum)]
+        preset: Option<VisualColourPreset>,
+        #[arg(long, requires = "preset", conflicts_with_all = ["reset", "effects_file"], value_parser = clap::value_parser!(u16).range(0..=10000))]
+        intensity_basis_points: Option<u16>,
+        #[arg(long)]
+        dry_run: bool,
+    },
     Delete {
         #[command(flatten)]
         write: Write,
@@ -485,6 +691,26 @@ enum VisualCommand {
         #[arg(long)]
         dry_run: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum VisualColourPreset {
+    Neutral,
+    WarmStory,
+    CoolClarity,
+    SoftMono,
+}
+
+impl From<VisualColourPreset> for lumeryn_core::visual_effects::ColourPreset {
+    fn from(value: VisualColourPreset) -> Self {
+        match value {
+            VisualColourPreset::Neutral => Self::Neutral,
+            VisualColourPreset::WarmStory => Self::WarmStory,
+            VisualColourPreset::CoolClarity => Self::CoolClarity,
+            VisualColourPreset::SoftMono => Self::SoftMono,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -711,6 +937,7 @@ enum ProjectPreset {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SchemaKind {
+    Template,
     Batch,
     Render,
     Clipboard,
@@ -817,6 +1044,21 @@ async fn edit(write: Write, batch: Batch, dry_run: bool, tools: &MediaTools) -> 
         .await
 }
 
+fn read_scene_document(path: &std::path::Path) -> Result<lumeryn_core::scene_text::SceneDocument> {
+    use std::io::Read;
+    const MAX_BYTES: u64 = 256 * 1024;
+    let file = std::fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_BYTES {
+        return Err(Error::Invalid("scene document exceeds 256 KiB".into()));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(Error::Invalid("scene document exceeds 256 KiB".into()));
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 fn media_view(media: &lumeryn_core::model::Media, usage_count: usize) -> Result<Value> {
     let mut value = serde_json::to_value(media)?;
     value["alias"] = json!(media.alias);
@@ -915,6 +1157,9 @@ async fn execute(cli: Cli) -> Result<Value> {
             project_call(project, Request::Cancel { job_id }).await
         }
         Command::Schema { kind } => Ok(match kind {
+            SchemaKind::Template => serde_json::to_value(schemars::schema_for!(
+                lumeryn_core::templates::TemplateRequest
+            ))?,
             SchemaKind::Batch => serde_json::to_value(schemars::schema_for!(Batch))?,
             SchemaKind::Render => serde_json::to_value(schemars::schema_for!(RenderOptions))?,
             SchemaKind::Clipboard => {
@@ -1150,9 +1395,215 @@ async fn execute(cli: Cli) -> Result<Value> {
             }
         },
         Command::Timeline(command) => match command {
+            TimelineCommand::Transition(command) => {
+                let (write, operation, dry_run) = match command {
+                    TransitionCommand::Set {
+                        write,
+                        id,
+                        outgoing_clip_id,
+                        incoming_clip_id,
+                        kind,
+                        duration_frames,
+                        dry_run,
+                    } => (
+                        write,
+                        Edit::SetTransition {
+                            id,
+                            outgoing_clip_id,
+                            incoming_clip_id,
+                            kind: kind.into(),
+                            duration_frames,
+                        },
+                        dry_run,
+                    ),
+                    TransitionCommand::Delete {
+                        write,
+                        transition_id,
+                        dry_run,
+                    } => (write, Edit::DeleteTransition { transition_id }, dry_run),
+                };
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![operation],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
+            TimelineCommand::Template {
+                project: path,
+                request_file,
+            } => {
+                use std::io::Read;
+                let file = std::fs::File::open(request_file)?;
+                let mut bytes = Vec::new();
+                file.take(16 * 1024 + 1).read_to_end(&mut bytes)?;
+                if bytes.len() > 16 * 1024 {
+                    return Err(Error::Invalid("template request exceeds16KiB".into()));
+                }
+                let request = serde_json::from_slice(&bytes)?;
+                let project = Client::connect(&path).await?.inspect().await?;
+                let expansion = lumeryn_core::templates::expand(&project, &request)?;
+                Ok(
+                    json!({"template":expansion,"committed":false,"commit_command":"project batch --dry-run, then project batch with the returned expected_revision and stable operation IDs"}),
+                )
+            }
+            TimelineCommand::Scene(command) => {
+                let (write, operation, dry_run) = match command {
+                    SceneCommand::Inspect { project } => {
+                        let snapshot = Client::connect(&project).await?.inspect().await?;
+                        return Ok(
+                            json!({"revision":snapshot.revision,"scenes":snapshot.scenes,"scene_placements":snapshot.scene_placements}),
+                        );
+                    }
+                    SceneCommand::Create {
+                        write,
+                        id,
+                        name,
+                        document_file,
+                        dry_run,
+                    } => {
+                        let id = operation_id(id, &write)?;
+                        let document = read_scene_document(&document_file)?;
+                        (write, Edit::CreateScene { id, name, document }, dry_run)
+                    }
+                    SceneCommand::Set {
+                        write,
+                        scene_id,
+                        document_file,
+                        dry_run,
+                    } => {
+                        let document = read_scene_document(&document_file)?;
+                        (write, Edit::SetScene { scene_id, document }, dry_run)
+                    }
+                    SceneCommand::Add {
+                        write,
+                        id,
+                        scene_id,
+                        track_id,
+                        at_frame,
+                        duration_frames,
+                        dry_run,
+                    } => {
+                        let id = operation_id(id, &write)?;
+                        (
+                            write,
+                            Edit::AddScenePlacement {
+                                id,
+                                scene_id,
+                                track_id,
+                                at_frame,
+                                duration_frames,
+                            },
+                            dry_run,
+                        )
+                    }
+                    SceneCommand::Range {
+                        write,
+                        clip_id,
+                        at_frame,
+                        duration_frames,
+                        dry_run,
+                    } => (
+                        write,
+                        Edit::SetSceneRange {
+                            clip_id,
+                            at_frame,
+                            duration_frames,
+                        },
+                        dry_run,
+                    ),
+                    SceneCommand::Move {
+                        write,
+                        clip_id,
+                        track_id,
+                        at_frame,
+                        dry_run,
+                    } => (
+                        write,
+                        Edit::MoveScenePlacement {
+                            clip_id,
+                            track_id,
+                            at_frame,
+                        },
+                        dry_run,
+                    ),
+                    SceneCommand::DeletePlacement {
+                        write,
+                        clip_id,
+                        dry_run,
+                    } => (write, Edit::DeleteScenePlacement { clip_id }, dry_run),
+                    SceneCommand::Delete {
+                        write,
+                        scene_id,
+                        dry_run,
+                    } => (write, Edit::DeleteScene { scene_id }, dry_run),
+                };
+                edit(
+                    write,
+                    Batch {
+                        operations: vec![operation],
+                    },
+                    dry_run,
+                    &tools,
+                )
+                .await
+            }
             TimelineCommand::Visual(command) => {
                 use lumeryn_core::model::VisualSource;
                 let (write, operation, dry_run) = match command {
+                    VisualCommand::Time {
+                        write,
+                        clip_id,
+                        effect_file,
+                        reset,
+                        dry_run,
+                    } => {
+                        use std::io::Read;
+                        let effect = if reset {
+                            Default::default()
+                        } else {
+                            let file = std::fs::File::open(effect_file.ok_or_else(|| {
+                                Error::Invalid("supply --effect-file or --reset".into())
+                            })?)?;
+                            let mut bytes = Vec::new();
+                            file.take(16 * 1024 + 1).read_to_end(&mut bytes)?;
+                            if bytes.len() > 16 * 1024 {
+                                return Err(Error::Invalid("time effect file exceeds16KiB".into()));
+                            }
+                            serde_json::from_slice(&bytes)?
+                        };
+                        (write, Edit::SetTimeEffect { clip_id, effect }, dry_run)
+                    }
+                    VisualCommand::Animation {
+                        write,
+                        clip_id,
+                        animation_file,
+                        reset,
+                        dry_run,
+                    } => {
+                        use std::io::Read;
+                        let animation = if reset {
+                            Default::default()
+                        } else {
+                            let file = std::fs::File::open(animation_file.ok_or_else(|| {
+                                Error::Invalid("supply --animation-file or --reset".into())
+                            })?)?;
+                            let mut bytes = Vec::new();
+                            file.take(16 * 1024 + 1).read_to_end(&mut bytes)?;
+                            if bytes.len() > 16 * 1024 {
+                                return Err(Error::Invalid("animation file exceeds16KiB".into()));
+                            }
+                            serde_json::from_slice(&bytes)?
+                        };
+                        (
+                            write,
+                            Edit::SetVisualAnimation { clip_id, animation },
+                            dry_run,
+                        )
+                    }
                     VisualCommand::TrackAdd {
                         write,
                         id,
@@ -1274,6 +1725,65 @@ async fn execute(cli: Cli) -> Result<Value> {
                         clip_id,
                         dry_run,
                     } => (write, Edit::DeleteVisualClip { clip_id }, dry_run),
+                    VisualCommand::Transform {
+                        write,
+                        clip_id,
+                        transform_file,
+                        reset,
+                        dry_run,
+                    } => {
+                        let transform = if reset {
+                            lumeryn_core::visual_transform::VisualTransform::default()
+                        } else {
+                            let path = transform_file.ok_or_else(|| {
+                                Error::Invalid("supply --transform-file or --reset".into())
+                            })?;
+                            if std::fs::metadata(&path)?.len() > 16 * 1024 {
+                                return Err(Error::Invalid("transform file exceeds 16 KiB".into()));
+                            }
+                            serde_json::from_slice(&std::fs::read(path)?)?
+                        };
+                        (
+                            write,
+                            Edit::SetVisualTransform { clip_id, transform },
+                            dry_run,
+                        )
+                    }
+                    VisualCommand::Effects {
+                        write,
+                        clip_id,
+                        effects_file,
+                        reset,
+                        preset,
+                        intensity_basis_points,
+                        dry_run,
+                    } => {
+                        use lumeryn_core::visual_effects::VisualEffects;
+                        let effects = if reset {
+                            VisualEffects::default()
+                        } else if let Some(preset) = preset {
+                            VisualEffects::preset(
+                                preset.into(),
+                                intensity_basis_points.unwrap_or(10000),
+                            )?
+                        } else {
+                            use std::io::Read;
+                            let path = effects_file.ok_or_else(|| {
+                                Error::Invalid("supply --effects-file, --preset or --reset".into())
+                            })?;
+                            let file = std::fs::File::open(path)?;
+                            if file.metadata()?.len() > 16 * 1024 {
+                                return Err(Error::Invalid("effects file exceeds 16 KiB".into()));
+                            }
+                            let mut bytes = Vec::new();
+                            file.take(16 * 1024 + 1).read_to_end(&mut bytes)?;
+                            if bytes.len() > 16 * 1024 {
+                                return Err(Error::Invalid("effects file exceeds 16 KiB".into()));
+                            }
+                            serde_json::from_slice(&bytes)?
+                        };
+                        (write, Edit::SetVisualEffects { clip_id, effects }, dry_run)
+                    }
                 };
                 edit(
                     write,

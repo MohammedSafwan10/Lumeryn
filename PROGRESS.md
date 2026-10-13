@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-10-13 — owner-requested pause checkpoint
+
+Feature implementation is paused at the owner's request. The current six-area source work is preserved as an unfinished private checkpoint, with tested foundations and outstanding integration/gates recorded in [PAUSED_CHECKPOINT](docs/roadmap/PAUSED_CHECKPOINT.md). `cargo fmt --check` and `cargo check --workspace --all-targets --locked -j4` passed on the paused source. The latest strict Clippy failure concerns enlarged service/preview enum variants; no release or completed feature claim is made. Normal installed schema3 editor/CLI binaries and owner projects remain unchanged.
+
+Owner-authorized workspace cache cleanup completed:29.57GiB physically reclaimed and68.28GiB free on D: afterward. Manifest `.lumeryn-scratch/cache-cleanup-a642e28a9f104ae39b0837dd25946ab3.json` records resolved-path/reparse-point/build-process checks and matching hashes of the preserved normal Studio/debug CLI/release CLI executables. The remaining shared compilation cache is removed; source, projects, media, reviewed assets, tools and evidence are retained. No background specialist/build remains active. Resume requires a cold source rebuild and completion of the recorded gates.
+
+## 2026-10-12 — owner-approved build-cache cleanup
+
+Owner approved deletion of audited retired compilation caches after workspace disk usage exceeded100GB. Cleanup removed only the approved retired scratch targets and normal-target generated dependency/build/incremental directories, after checking resolved workspace paths, reparse points and active Cargo/rustc processes. Source, projects, media, tools, evidence and the shared composition target were preserved. Before/after hashes of normal debug Studio/CLI and release CLI executables matched. Manifest `.lumeryn-scratch/cache-cleanup-9ba3c7ddcc65490ca8252ea8544f6ddb.json` records completion:71,853,473,792bytes physically recovered (66.9GiB); D: free space increased from9,348,849,664 to81,202,323,456bytes (75.6GiB).
+
+Repeated isolated targets and incremental artifacts caused the bulk of growth. Multi-agent Cargo work now uses one shared target with serialized builds; dev/test profiles retain limited debugging for workspace code, omit dependency debug symbols and disable incremental artifacts. Tests retain default overflow checks/debug assertions. Profile changes require a one-time rebuild; reduced future artifact growth is expected, not yet benchmarked. Six-area implementation remains in progress and is not declared shipped by this maintenance milestone.
+
 ## 2026-10-12 — responsive media actions and actual PNG source gestures
 
 Owner reported a clipped lower action after creating layers. The media grid reserved a fixed70pixels for one action, but selected video exposes both primary insertion and overlay placement plus an FPS label. Replaced that budget with interaction/font/spacing-aware reservation for both buttons, conservatively across selection changes. The existing media grid scrolls inside the remaining space; actions stay reachable. Real980×640 and1280×720 media-state captures passed and were visually inspected; both buttons are fully visible. An actual egui long-grid test checks180/300/500pixel drawer bounds.

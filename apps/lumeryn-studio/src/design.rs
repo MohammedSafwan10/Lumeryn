@@ -109,6 +109,7 @@ pub enum Icon {
     Clip,
     Project,
     Library,
+    Text,
     Undo,
     Redo,
     Close,
@@ -373,6 +374,17 @@ fn paint_icon(p: &egui::Painter, center: egui::Pos2, icon: Icon, color: Color32)
         Icon::Close => {
             p.line_segment([r.left_top(), r.right_bottom()], stroke);
             p.line_segment([r.right_top(), r.left_bottom()], stroke);
+        }
+        Icon::Text => {
+            p.line_segment([r.left_top(), r.right_top()], stroke);
+            p.line_segment([r.center_top(), r.center_bottom()], stroke);
+            p.line_segment(
+                [
+                    r.center_bottom() - egui::vec2(4.0, 0.0),
+                    r.center_bottom() + egui::vec2(4.0, 0.0),
+                ],
+                stroke,
+            );
         }
     }
 }

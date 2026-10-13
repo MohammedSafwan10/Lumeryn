@@ -31,6 +31,8 @@ pub struct PictureRect {
 
 #[derive(Debug, Clone)]
 pub struct Picture {
+    pub time_effect: crate::time_effects::TimeEffect,
+    pub animation: crate::animation::Animation,
     pub path: PathBuf,
     pub digest: String,
     pub source: PictureSource,
@@ -38,10 +40,25 @@ pub struct Picture {
     pub duration_frames: u64,
     pub layer: usize,
     pub rect: PictureRect,
+    pub source_width: u32,
+    pub source_height: u32,
+    pub transform: crate::visual_transform::VisualTransform,
+    pub effects: crate::visual_effects::VisualEffects,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScenePicture {
+    pub animation: crate::animation::Animation,
+    pub document: crate::scene_text::SceneDocument,
+    pub at_frame: u64,
+    pub duration_frames: u64,
+    pub layer: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct VisualPlan {
+    pub transition: Option<crate::transition_backend::TransitionPlan>,
+    pub scenes: Vec<ScenePicture>,
     pub pictures: Vec<Picture>,
     pub rate: FrameRate,
     pub total_frames: u64,
@@ -58,10 +75,21 @@ impl VisualPlan {
         revision: u64,
         width: u32,
         height: u32,
-        mut pictures: Vec<Picture>,
+        pictures: Vec<Picture>,
     ) -> Result<Self> {
-        if pictures.is_empty()
-            || pictures.len() > MAX_COMPOSITION_INPUTS
+        Self::new_with_scenes(rate, revision, width, height, pictures, Vec::new())
+    }
+
+    pub fn new_with_scenes(
+        rate: FrameRate,
+        revision: u64,
+        width: u32,
+        height: u32,
+        mut pictures: Vec<Picture>,
+        mut scenes: Vec<ScenePicture>,
+    ) -> Result<Self> {
+        if pictures.len() + scenes.len() == 0
+            || pictures.len() + scenes.len() > MAX_COMPOSITION_INPUTS
             || !(2..=8192).contains(&width)
             || !(2..=8192).contains(&height)
         {
@@ -71,6 +99,14 @@ impl VisualPlan {
         }
         let mut boundaries = Vec::new();
         for picture in &pictures {
+            crate::animation_backend::validate_supported(
+                &picture.animation,
+                picture.duration_frames,
+            )?;
+            picture.effects.validate(picture.duration_frames)?;
+            picture
+                .transform
+                .validate(picture.source_width, picture.source_height)?;
             let end = picture
                 .at_frame
                 .checked_add(picture.duration_frames)
@@ -87,12 +123,38 @@ impl VisualPlan {
                 return Err(Error::Invalid("invalid picture span or rectangle".into()));
             }
             if let PictureSource::Video { source_in_frame } = picture.source {
-                source_in_frame
-                    .checked_add(picture.duration_frames)
-                    .filter(|end| *end <= MAX_FRAMES)
-                    .ok_or_else(|| Error::Invalid("picture source endpoint overflow".into()))?;
+                picture.time_effect.validate(
+                    source_in_frame,
+                    picture.duration_frames,
+                    MAX_FRAMES,
+                )?;
+            } else if picture.time_effect != crate::time_effects::TimeEffect::Normal {
+                return Err(Error::Unsupported(
+                    "image holds cannot carry video time effects".into(),
+                ));
             }
             boundaries.extend([picture.at_frame, end]);
+        }
+        for scene in &scenes {
+            crate::animation_backend::validate_supported(&scene.animation, scene.duration_frames)?;
+            scene
+                .document
+                .validate()
+                .map_err(|error| Error::Invalid(error.to_string()))?;
+            if scene.document.width != width || scene.document.height != height {
+                return Err(Error::Invalid(
+                    "scene canvas must match project canvas".into(),
+                ));
+            }
+            let end = scene
+                .at_frame
+                .checked_add(scene.duration_frames)
+                .filter(|end| *end <= MAX_FRAMES)
+                .ok_or_else(|| Error::Invalid("scene endpoint overflow".into()))?;
+            if scene.duration_frames == 0 {
+                return Err(Error::Invalid("empty scene placement".into()));
+            }
+            boundaries.extend([scene.at_frame, end]);
         }
         for frame in &boundaries {
             let active = pictures
@@ -100,6 +162,12 @@ impl VisualPlan {
                 .filter(|picture| {
                     picture.at_frame <= *frame
                         && *frame < picture.at_frame + picture.duration_frames
+                })
+                .collect::<Vec<_>>();
+            let active_scenes = scenes
+                .iter()
+                .filter(|scene| {
+                    scene.at_frame <= *frame && *frame < scene.at_frame + scene.duration_frames
                 })
                 .collect::<Vec<_>>();
             if active
@@ -111,6 +179,7 @@ impl VisualPlan {
                     .iter()
                     .filter(|picture| picture.source == PictureSource::Image)
                     .count()
+                    + active_scenes.len()
                     > 1
             {
                 return Err(Error::Unsupported(
@@ -118,18 +187,25 @@ impl VisualPlan {
                 ));
             }
             let mut layers = HashSet::new();
-            if active.iter().any(|picture| !layers.insert(picture.layer)) {
+            if active.iter().any(|picture| !layers.insert(picture.layer))
+                || active_scenes
+                    .iter()
+                    .any(|scene| !layers.insert(scene.layer))
+            {
                 return Err(Error::Invalid(
                     "pictures overlap on one visual track".into(),
                 ));
             }
         }
         pictures.sort_by_key(|picture| (picture.layer, picture.at_frame));
+        scenes.sort_by_key(|scene| (scene.layer, scene.at_frame));
         let total_frames = boundaries
             .into_iter()
             .max()
             .ok_or_else(|| Error::Invalid("composition has no duration".into()))?;
         Ok(Self {
+            transition: None,
+            scenes,
             pictures,
             rate,
             total_frames,
@@ -158,6 +234,7 @@ impl VisualPlan {
             .iter()
             .map(|clip| {
                 (
+                    clip.id,
                     clip.media_id,
                     PictureSource::Video {
                         source_in_frame: clip.source_in_frame,
@@ -187,6 +264,7 @@ impl VisualPlan {
                 height: rect.height,
             });
             placements.push((
+                clip.id,
                 clip.media_id,
                 source,
                 clip.at_frame,
@@ -198,7 +276,7 @@ impl VisualPlan {
         if placements.len() > MAX_COMPOSITION_INPUTS {
             return Err(Error::Unsupported("composition requires at most three total picture placements; sequential contiguous projects retain their established fast path".into()));
         }
-        for (media_id, source, at_frame, duration_frames, layer, rect) in placements {
+        for (clip_id, media_id, source, at_frame, duration_frames, layer, rect) in placements {
             let media = project
                 .media
                 .iter()
@@ -220,7 +298,7 @@ impl VisualPlan {
             }
             match source {
                 PictureSource::Image if video.codec != "png" => return Err(Error::Unsupported("image holds currently require PNG".into())),
-                PictureSource::Video { source_in_frame } if video.codec == "png" || !video.constant_rate || video.frame_rate != project.frame_rate || source_in_frame.checked_add(duration_frames).is_none_or(|end| end > video.frames) => return Err(Error::Unsupported("moving picture requires matching verified CFR and an available source range".into())),
+                PictureSource::Video { source_in_frame } if video.codec == "png" || !video.constant_rate || video.frame_rate != project.frame_rate || project.time_effects.get(&clip_id).copied().unwrap_or_default().validate(source_in_frame,duration_frames,video.frames).is_err() => return Err(Error::Unsupported("moving picture requires matching verified CFR and an available source range".into())),
                 _ => {}
             }
             let path = local_file(&parent.join(&media.path))?;
@@ -236,6 +314,16 @@ impl VisualPlan {
                 ));
             }
             pictures.push(Picture {
+                time_effect: project
+                    .time_effects
+                    .get(&clip_id)
+                    .copied()
+                    .unwrap_or_default(),
+                animation: project
+                    .animations
+                    .get(&clip_id)
+                    .cloned()
+                    .unwrap_or_default(),
                 path,
                 digest: digest.clone(),
                 source,
@@ -243,15 +331,61 @@ impl VisualPlan {
                 duration_frames,
                 layer,
                 rect,
+                source_width: video.width,
+                source_height: video.height,
+                transform: project.visual_settings.get(&clip_id).map_or_else(
+                    crate::visual_transform::VisualTransform::default,
+                    |settings| settings.transform,
+                ),
+                effects: project
+                    .visual_settings
+                    .get(&clip_id)
+                    .and_then(|settings| settings.effects)
+                    .unwrap_or_default(),
             });
         }
-        Self::new(
+        let scenes = project
+            .scene_placements
+            .iter()
+            .map(|placement| {
+                let scene = project
+                    .scenes
+                    .iter()
+                    .find(|scene| scene.id == placement.scene_id)
+                    .ok_or_else(|| Error::NotFound("scene asset".into()))?;
+                let layer = project
+                    .visual_tracks
+                    .iter()
+                    .position(|track| track.id == placement.track_id)
+                    .ok_or_else(|| Error::NotFound("scene visual track".into()))?
+                    + 1;
+                Ok(ScenePicture {
+                    animation: project
+                        .animations
+                        .get(&placement.id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    document: scene.document.clone(),
+                    at_frame: placement.at_frame,
+                    duration_frames: placement.duration_frames,
+                    layer,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut plan = Self::new_with_scenes(
             project.frame_rate,
             project.revision,
             project.width,
             project.height,
             pictures,
-        )
+            scenes,
+        )?;
+        if !project.transitions.is_empty() {
+            plan.transition = Some(
+                crate::transition_backend::TransitionPlan::from_project(project, database).await?,
+            );
+        }
+        Ok(plan)
     }
 
     /// Active pictures at an exact output sample, in stable bottom-to-top order.
@@ -260,12 +394,13 @@ impl VisualPlan {
         output_frame: u64,
         output_rate: FrameRate,
     ) -> Result<Vec<(&Picture, Option<u64>)>> {
-        Self::new(
+        Self::new_with_scenes(
             self.rate,
             self.revision,
             self.width,
             self.height,
             self.pictures.clone(),
+            self.scenes.clone(),
         )?;
         let numerator = u128::from(output_frame)
             .checked_mul(u128::from(output_rate.denominator()))
@@ -283,15 +418,21 @@ impl VisualPlan {
             {
                 let source = match picture.source {
                     PictureSource::Image => None,
-                    PictureSource::Video { source_in_frame } => Some(
-                        source_in_frame
-                            .checked_add(
-                                u64::try_from(numerator / denominator)
-                                    .map_err(|_| Error::Invalid("picture time overflow".into()))?
-                                    - picture.at_frame,
-                            )
-                            .ok_or_else(|| Error::Invalid("picture time overflow".into()))?,
-                    ),
+                    PictureSource::Video { source_in_frame } => {
+                        let local = crate::animation::RationalFrame::new(
+                            numerator - u128::from(picture.at_frame) * denominator,
+                            denominator,
+                        )?;
+                        picture
+                            .time_effect
+                            .source_at(local, source_in_frame, picture.duration_frames, MAX_FRAMES)?
+                            .map(|time| {
+                                let (n, d) = time.as_ratio();
+                                u64::try_from(n / d)
+                                    .map_err(|_| Error::Invalid("source sample overflow".into()))
+                            })
+                            .transpose()?
+                    }
                 };
                 active.push((picture, source));
             }
@@ -301,6 +442,9 @@ impl VisualPlan {
     }
 
     pub async fn verify_sources(&self) -> Result<()> {
+        if let Some(transition) = &self.transition {
+            transition.verify_sources().await?;
+        }
         for picture in &self.pictures {
             if content_hash(&picture.path).await? != picture.digest {
                 return Err(Error::Invalid(
@@ -314,7 +458,13 @@ impl VisualPlan {
 
 /// Keep the mature sequential path whenever no composition semantics are required.
 pub fn requires_composition(project: &Project) -> bool {
-    if !project.visual_clips.is_empty() {
+    if !project.visual_clips.is_empty()
+        || !project.scene_placements.is_empty()
+        || !project.visual_settings.is_empty()
+        || !project.animations.is_empty()
+        || !project.time_effects.is_empty()
+        || !project.transitions.is_empty()
+    {
         return true;
     }
     let mut clips = project.clips.iter().collect::<Vec<_>>();
@@ -337,6 +487,8 @@ mod tests {
         duration_frames: u64,
     ) -> Picture {
         Picture {
+            time_effect: Default::default(),
+            animation: Default::default(),
             path: "fixture".into(),
             digest: "proof".into(),
             source,
@@ -349,6 +501,10 @@ mod tests {
                 width: 128,
                 height: 72,
             },
+            source_width: 128,
+            source_height: 72,
+            transform: Default::default(),
+            effects: Default::default(),
         }
     }
     #[test]

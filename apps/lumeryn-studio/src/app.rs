@@ -24,6 +24,19 @@ use std::{
 };
 use uuid::Uuid;
 
+#[path = "canvas_transform.rs"]
+mod canvas_transform;
+
+#[path = "animation_ui.rs"]
+mod animation_ui;
+#[path = "colour.rs"]
+mod colour;
+#[path = "time_ui.rs"]
+mod time_ui;
+
+#[path = "scenes.rs"]
+mod scenes;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AudioEdit {
     pub clip: Uuid,
@@ -56,6 +69,8 @@ impl Panel {
 enum LeftDrawer {
     Media,
     Library,
+    Scenes,
+    Transitions,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RightDrawer {
@@ -237,7 +252,10 @@ struct ImportCard {
 }
 
 pub struct Session {
+    canvas_transform: canvas_transform::CanvasTransform,
     visual_form: Option<VisualForm>,
+    transform_form: Option<TransformForm>,
+    scene_form: Option<scenes::SceneForm>,
     target_layer: Option<Uuid>,
     backend: Backend,
     pub project: Option<Project>,
@@ -313,6 +331,12 @@ struct VisualForm {
     height: u32,
 }
 
+struct TransformForm {
+    clip: Uuid,
+    revision: u64,
+    value: lumeryn_core::visual_transform::VisualTransform,
+}
+
 impl Session {
     fn new(cc: &eframe::CreationContext<'_>, options: &Options) -> Self {
         let tools = ToolConfig {
@@ -347,6 +371,7 @@ impl Session {
             project: None,
             database: None,
             epoch: 1,
+            canvas_transform: Default::default(),
             project_input: options
                 .project
                 .as_ref()
@@ -354,6 +379,8 @@ impl Session {
             media_input: String::new(),
             selected: None,
             visual_form: None,
+            transform_form: None,
+            scene_form: None,
             target_layer: None,
             trim_source: 0,
             trim_duration: 1,
@@ -472,6 +499,8 @@ impl Session {
             texture.invalidate();
         }
         self.selected = None;
+        self.transform_form = None;
+        self.scene_form = None;
         self.selected_media = None;
         self.media_rename = None;
         self.export_name = "export.mp4".into();
@@ -635,6 +664,7 @@ impl Session {
                             !project.clips.iter().any(|clip| clip.id == id)
                                 && !project.audio_clips.iter().any(|clip| clip.id == id)
                                 && !project.visual_clips.iter().any(|clip| clip.id == id)
+                                && !project.scene_placements.iter().any(|clip| clip.id == id)
                         }) {
                             self.selected = project
                                 .clips
@@ -645,7 +675,8 @@ impl Session {
                                             < clip.at_frame.saturating_add(clip.duration_frames)
                                 })
                                 .or_else(|| project.clips.first())
-                                .map(|clip| clip.id);
+                                .map(|clip| clip.id)
+                                .or_else(|| project.scene_placements.first().map(|clip| clip.id));
                         }
                         if let Some(clip) = project
                             .clips
@@ -893,6 +924,8 @@ impl Session {
 
     pub(crate) fn select(&mut self, id: Uuid) {
         self.visual_form = None;
+        self.transform_form = None;
+        self.scene_form = None;
         self.selected = Some(id);
         if let Some(clip) = self
             .project
@@ -1910,6 +1943,34 @@ impl Session {
                 self.pick(ui.ctx(), Picker::Create);
             }
         }
+        if let Some(project) = &self.project {
+            let paused = self
+                .preview
+                .as_ref()
+                .is_none_or(|preview| !preview.status().playing);
+            let result = self.canvas_transform.draw(
+                ui,
+                canvas_transform::CanvasView {
+                    image: image_rect,
+                    project,
+                    selected: self.selected,
+                    epoch: self.epoch,
+                    editable: current
+                        && paused
+                        && self.connected
+                        && !self.edit_busy
+                        && !self.render_busy,
+                    frame: self.playhead,
+                },
+            );
+            match result {
+                Ok(Some(operation)) => {
+                    self.edit(operation, "Place overlay");
+                }
+                Err(error) => self.fail(error),
+                Ok(None) => {}
+            }
+        }
         ui.painter().rect_stroke(
             image_rect,
             2.0,
@@ -2065,6 +2126,14 @@ impl Session {
         });
     }
     fn inspector(&mut self, ui: &mut egui::Ui) {
+        if self.project.as_ref().is_some_and(|p| {
+            p.scene_placements
+                .iter()
+                .any(|c| Some(c.id) == self.selected)
+        }) {
+            self.scene_inspector(ui);
+            return;
+        }
         if self
             .project
             .as_ref()
@@ -2212,6 +2281,7 @@ impl Session {
                 ));
             }
         });
+        self.transform_inspector(ui, id);
         if apply {
             self.trim(id, self.trim_source, self.trim_duration);
         }
@@ -2374,6 +2444,19 @@ impl Session {
             return;
         }
         let operation = match payload.source {
+            timeline::DragSource::VisualClip { clip, .. }
+                if project.scene_placements.iter().any(|p| p.id == clip) =>
+            {
+                if track_id == project.video_track_id {
+                    self.fail("Move editable overlays to an overlay layer.".into());
+                    return;
+                }
+                Edit::MoveScenePlacement {
+                    clip_id: clip,
+                    track_id,
+                    at_frame,
+                }
+            }
             timeline::DragSource::VisualClip { clip, .. } => {
                 if project
                     .visual_clips
@@ -2624,6 +2707,156 @@ impl Session {
         } else if delete {
             self.edit(Edit::DeleteVisualClip { clip_id: id }, "Delete visual clip");
         }
+        self.transform_inspector(ui, id);
+    }
+
+    fn transform_inspector(&mut self, ui: &mut egui::Ui, clip_id: Uuid) {
+        use lumeryn_core::visual_transform::{FitMode, SourceCrop, VisualTransform};
+        let Some(project) = &self.project else {
+            return;
+        };
+        if project.schema_version < 4 {
+            return;
+        }
+        let media_id = project
+            .clips
+            .iter()
+            .find(|clip| clip.id == clip_id)
+            .map(|clip| clip.media_id)
+            .or_else(|| {
+                project
+                    .visual_clips
+                    .iter()
+                    .find(|clip| clip.id == clip_id)
+                    .map(|clip| clip.media_id)
+            });
+        let Some(video) = project
+            .media
+            .iter()
+            .find(|media| Some(media.id) == media_id)
+            .and_then(|media| media.metadata.video.as_ref())
+        else {
+            return;
+        };
+        let (source_width, source_height) = (video.width, video.height);
+        if self
+            .transform_form
+            .as_ref()
+            .is_none_or(|form| form.clip != clip_id || form.revision != project.revision)
+        {
+            self.transform_form = Some(TransformForm {
+                clip: clip_id,
+                revision: project.revision,
+                value: project
+                    .visual_settings
+                    .get(&clip_id)
+                    .map_or_else(VisualTransform::default, |settings| settings.transform),
+            });
+        }
+        let Some(form) = &mut self.transform_form else {
+            return;
+        };
+        let mut apply = false;
+        let mut reset = false;
+        ui.collapsing("Transform", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Fit");
+                egui::ComboBox::from_id_salt(("transform-fit", clip_id))
+                    .selected_text(if form.value.fit == FitMode::Contain {
+                        "Fit inside"
+                    } else {
+                        "Fill frame"
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut form.value.fit, FitMode::Contain, "Fit inside");
+                        ui.selectable_value(&mut form.value.fit, FitMode::Cover, "Fill frame");
+                    });
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut form.value.flip_horizontal, "Flip horizontal");
+                ui.checkbox(&mut form.value.flip_vertical, "Flip vertical");
+            });
+            let mut rotation = f64::from(form.value.rotation_millidegrees) / 1000.0;
+            if ui
+                .add(egui::Slider::new(&mut rotation, -180.0..=180.0).text("Rotation °"))
+                .changed()
+            {
+                form.value.rotation_millidegrees = (rotation * 1000.0).round() as i32;
+            }
+            let mut opacity = f64::from(form.value.opacity_basis_points) / 100.0;
+            if ui
+                .add(egui::Slider::new(&mut opacity, 0.0..=100.0).text("Opacity %"))
+                .changed()
+            {
+                form.value.opacity_basis_points = (opacity * 100.0).round() as u16;
+            }
+            let mut cropped = form.value.crop.is_some();
+            if ui.checkbox(&mut cropped, "Crop source").changed() {
+                form.value.crop = cropped.then_some(SourceCrop {
+                    x: 0,
+                    y: 0,
+                    width: source_width,
+                    height: source_height,
+                });
+            }
+            if let Some(crop) = &mut form.value.crop {
+                egui::Grid::new(("source-crop", clip_id))
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for (label, value, maximum) in [
+                            ("Left", &mut crop.x, source_width.saturating_sub(1)),
+                            ("Top", &mut crop.y, source_height.saturating_sub(1)),
+                            ("Width", &mut crop.width, source_width),
+                            ("Height", &mut crop.height, source_height),
+                        ] {
+                            ui.label(label);
+                            ui.add(egui::DragValue::new(value).range(0..=maximum));
+                            ui.end_row();
+                        }
+                    });
+            }
+            ui.label(
+                RichText::new("Rotation stays inside the placement rectangle.")
+                    .small()
+                    .color(design::MUTED),
+            );
+            if let Err(error) = form.value.validate(source_width, source_height) {
+                ui.label(
+                    RichText::new(error.to_string())
+                        .small()
+                        .color(design::WARNING),
+                );
+            }
+            apply = design::primary(
+                ui,
+                "Apply transform",
+                self.connected
+                    && !self.edit_busy
+                    && form.value.validate(source_width, source_height).is_ok(),
+                ui.available_width(),
+            )
+            .clicked();
+            reset = ui
+                .add_enabled(
+                    self.connected && !self.edit_busy,
+                    egui::Button::new("Reset transform"),
+                )
+                .clicked();
+        });
+        if apply || reset {
+            let transform = if reset {
+                VisualTransform::default()
+            } else {
+                form.value
+            };
+            self.edit(
+                Edit::SetVisualTransform { clip_id, transform },
+                "Transform clip",
+            );
+        }
+        self.colour_inspector(ui, clip_id);
+        self.animation_inspector(ui, clip_id);
+        self.time_inspector(ui, clip_id);
     }
     pub(crate) fn drag_payload(
         &self,
@@ -3656,6 +3889,8 @@ impl Studio {
                     )
                 {
                     Some(LeftDrawer::Library)
+                } else if options.capture_only && options.capture_state == CaptureState::Scenes {
+                    Some(LeftDrawer::Scenes)
                 } else {
                     Some(LeftDrawer::Media)
                 },
@@ -3824,6 +4059,26 @@ impl Studio {
             {
                 self.drawers.toggle_left(LeftDrawer::Library, compact);
             }
+            if design::rail_button(
+                ui,
+                design::Icon::Text,
+                "Text & shapes",
+                left_drawer == Some(LeftDrawer::Scenes),
+            )
+            .clicked()
+            {
+                self.drawers.toggle_left(LeftDrawer::Scenes, compact);
+            }
+            if design::rail_button(
+                ui,
+                design::Icon::Clip,
+                "Transitions",
+                left_drawer == Some(LeftDrawer::Transitions),
+            )
+            .clicked()
+            {
+                self.drawers.toggle_left(LeftDrawer::Transitions, compact);
+            }
         });
         pane(ui, "right-rail", layout.right_rail, 4, |ui| {
             if design::rail_button(
@@ -3851,7 +4106,11 @@ impl Studio {
             pane(ui, "resource-drawer", rect, 12, |ui| {
                 if drawer_header(
                     ui,
-                    if left_drawer == Some(LeftDrawer::Library) {
+                    if left_drawer == Some(LeftDrawer::Transitions) {
+                        "Transitions"
+                    } else if left_drawer == Some(LeftDrawer::Scenes) {
+                        "Text & shapes"
+                    } else if left_drawer == Some(LeftDrawer::Library) {
                         "Content library"
                     } else {
                         "My media"
@@ -3860,6 +4119,8 @@ impl Studio {
                     self.drawers.left = None;
                 }
                 match left_drawer {
+                    Some(LeftDrawer::Transitions) => self.session.transitions_panel(ui),
+                    Some(LeftDrawer::Scenes) => self.session.scenes_panel(ui),
                     Some(LeftDrawer::Library) => {
                         if self.session.library.show(
                             ui,

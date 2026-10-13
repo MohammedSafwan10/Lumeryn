@@ -213,8 +213,10 @@ where
             filters.push(format!("anullsrc=r=48000:cl=stereo,atrim=duration={duration},asetpts=PTS-STARTPTS[a{index}]"));
         }
     }
+    let mut visual_resources = None;
     if let Some(pictures) = &visual_plan {
-        let program = crate::visual_backend::lower(pictures, width, height)?;
+        let program = crate::visual_backend::lower_at_rate(pictures, width, height, frame_rate)?;
+        visual_resources = program.resources;
         args.extend(program.input_args);
         filters.push(program.filters);
         filters.push(format!("[{}]null[vcat]", program.output_label));
@@ -244,7 +246,15 @@ where
     // Convert presentation rate once after evaluating original source-frame cuts. Pad at most
     // the quantized final frame; never decode proxies or apply monitor-only audio settings.
     let mut video_filter = String::new();
-    video_filter.push_str(&format!("settb=expr={}/{},setpts=N,fps=fps={frame_rate}:start_time=0:round=up:eof_action=pass,tpad=stop_mode=clone:stop_duration=1,trim=end_frame={rendered_frames},setpts=N/({frame_rate}*TB)", project.frame_rate.denominator(), project.frame_rate.numerator()));
+    if visual_plan.is_some() {
+        video_filter.push_str(&format!(
+            "settb=expr={}/{},trim=end_frame={rendered_frames},setpts=N",
+            frame_rate.denominator(),
+            frame_rate.numerator()
+        ));
+    } else {
+        video_filter.push_str(&format!("settb=expr={}/{},setpts=N,fps=fps={frame_rate}:start_time=0:round=up:eof_action=pass,tpad=stop_mode=clone:stop_duration=1,trim=end_frame={rendered_frames},setpts=N/({frame_rate}*TB)", project.frame_rate.denominator(), project.frame_rate.numerator()));
+    }
     filters.push(format!("[vcat]{video_filter}[vout]"));
     let audio_label = if audio_plan.is_some() {
         "lumeryn_audio_output"
@@ -311,6 +321,8 @@ where
         };
         tools.run(&tools.ffmpeg, &encode(&selected)).await?;
     }
+    // Keep scene raster inputs alive through the encoder and its software retry.
+    drop(visual_resources);
     progress(RenderStage::Verification).await;
     for (path, digest) in source_digests {
         if &content_hash(&path).await? != digest {

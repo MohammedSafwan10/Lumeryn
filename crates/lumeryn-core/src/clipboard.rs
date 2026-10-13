@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 3;
 pub const MAX_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -18,11 +18,18 @@ pub struct Clipboard {
     pub frame_rate: crate::time::FrameRate,
     pub source_in_frame: u64,
     pub duration_frames: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual_settings: Option<crate::model::VisualSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<crate::animation::Animation>,
 }
 
 impl Clipboard {
     pub fn copy(project: &Project, clip_id: Uuid) -> Result<Self> {
         project.validate()?;
+        if project.time_effects.contains_key(&clip_id) {
+            return Err(crate::Error::Unsupported("clipboard of a retimed clip requires an interchange update; reset its time effect first".into()));
+        }
         let clip = project
             .clips
             .iter()
@@ -40,7 +47,7 @@ impl Clipboard {
             )
         })?;
         validate_digest(digest)?;
-        Ok(Self {
+        let clipboard = Self {
             version: VERSION,
             project_id: project.id,
             media_id: clip.media_id,
@@ -48,7 +55,15 @@ impl Clipboard {
             frame_rate: project.frame_rate,
             source_in_frame: clip.source_in_frame,
             duration_frames: clip.duration_frames,
-        })
+            visual_settings: project.visual_settings.get(&clip_id).cloned(),
+            animation: project.animations.get(&clip_id).cloned(),
+        };
+        if serde_json::to_vec(&clipboard)?.len() > MAX_BYTES {
+            return Err(Error::Invalid(
+                "animated clipboard exceeds 16 KiB; simplify keyframes".into(),
+            ));
+        }
+        Ok(clipboard)
     }
 
     /// Strictly parse a bounded payload object, rather than a CLI response envelope.
@@ -62,11 +77,43 @@ impl Clipboard {
     }
 
     fn validate_format(&self) -> Result<()> {
-        if self.version != VERSION {
+        if serde_json::to_vec(self)?.len() > MAX_BYTES {
+            return Err(Error::Invalid(
+                "clipboard exceeds 16 KiB; simplify animation keys".into(),
+            ));
+        }
+        if !(1..=VERSION).contains(&self.version) {
             return Err(Error::Unsupported(format!(
                 "clipboard version {}",
                 self.version
             )));
+        }
+        if let Some(animation) = &self.animation {
+            if self.version < 3 || animation.channels.is_empty() {
+                return Err(Error::Invalid(
+                    "nonempty clipboard animation requires version 3".into(),
+                ));
+            }
+            animation.validate(self.duration_frames)?;
+        }
+        if self.version == 1 && self.visual_settings.is_some() {
+            return Err(Error::Invalid(
+                "clipboard visual properties require version 2".into(),
+            ));
+        }
+        if let Some(settings) = &self.visual_settings {
+            if settings.is_identity()
+                || settings
+                    .effects
+                    .is_some_and(|effects| effects.is_identity())
+            {
+                return Err(Error::Invalid(
+                    "clipboard identity visual settings must be omitted".into(),
+                ));
+            }
+            if let Some(effects) = settings.effects {
+                effects.validate(self.duration_frames)?;
+            }
         }
         validate_digest(&self.source_blake3)?;
         if self.duration_frames == 0 {
@@ -121,6 +168,14 @@ pub fn paste_edit(
     // track/rate compatibility and object limits; caller's project remains unchanged.
     let mut candidate = project.clone();
     candidate.apply(&edit, None)?;
+    if let Some(settings) = &clipboard.visual_settings {
+        candidate.visual_settings.insert(id, settings.clone());
+        candidate.validate()?;
+    }
+    if let Some(animation) = &clipboard.animation {
+        candidate.animations.insert(id, animation.clone());
+        candidate.validate()?;
+    }
     Ok(edit)
 }
 
@@ -217,7 +272,7 @@ mod tests {
                 ..clipboard.clone()
             },
             Clipboard {
-                version: 2,
+                version: 3,
                 ..clipboard.clone()
             },
             Clipboard {
